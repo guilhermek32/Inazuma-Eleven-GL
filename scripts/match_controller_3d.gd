@@ -25,6 +25,7 @@ class PlayerState:
 	var role := PlayerRole.MIDFIELDER
 	var stun_timer := 0.0
 	var kick_power := 0.0
+	var hold_timer := 0.0
 	var is_moving := false
 	var is_targeting_ball := false
 	var node: Node3D
@@ -94,6 +95,7 @@ var shoot_was_pressed := false
 var aim_world := Vector2.ZERO
 var selected_player_index := -1
 var celebration_timer := 0.0
+var camera_look := Vector3.ZERO
 
 func _ready() -> void:
 	_build_materials()
@@ -216,8 +218,8 @@ func _build_lighting() -> void:
 		Vector3(24.0, 14.0, -19.0),
 		Vector3(-24.0, 14.0, 19.0),
 		Vector3(24.0, 14.0, 19.0),
-		Vector3(0.0, 16.0, -23.0),
-		Vector3(0.0, 16.0, 23.0),
+		Vector3(0.0, 16.0, -31.0),
+		Vector3(0.0, 16.0, 31.0),
 	]
 	for i in positions.size():
 		_add_floodlight(flood_root, positions[i], i)
@@ -448,7 +450,8 @@ func _create_teams() -> void:
 	team_red.clear()
 	team_blue.clear()
 	var s := 0.2
-	_add_player(team_red, -FIELD_BOUNDARY_X, 0.00, s, -1, PlayerRole.GOALKEEPER)
+	var gk_speed := 0.32
+	_add_player(team_red, -FIELD_BOUNDARY_X, 0.00, gk_speed, -1, PlayerRole.GOALKEEPER)
 	_add_player(team_red, -0.65, 0.25, s, -1, PlayerRole.DEFENDER)
 	_add_player(team_red, -0.65, -0.25, s, -1, PlayerRole.DEFENDER)
 	_add_player(team_red, -0.60, 0.50, s, -1, PlayerRole.DEFENDER)
@@ -459,7 +462,7 @@ func _create_teams() -> void:
 	_add_player(team_red, -0.10, 0.00, s, -1, PlayerRole.ATTACKER)
 	_add_player(team_red, -0.10, 0.40, s, -1, PlayerRole.ATTACKER)
 	_add_player(team_red, -0.10, -0.40, s, -1, PlayerRole.ATTACKER)
-	_add_player(team_blue, FIELD_BOUNDARY_X, 0.00, s, 1, PlayerRole.GOALKEEPER)
+	_add_player(team_blue, FIELD_BOUNDARY_X, 0.00, gk_speed, 1, PlayerRole.GOALKEEPER)
 	_add_player(team_blue, 0.65, 0.25, s, 1, PlayerRole.DEFENDER)
 	_add_player(team_blue, 0.65, -0.25, s, 1, PlayerRole.DEFENDER)
 	_add_player(team_blue, 0.60, 0.50, s, 1, PlayerRole.DEFENDER)
@@ -573,6 +576,7 @@ func _reset_players(team: Array[PlayerState]) -> void:
 		p.facing_y = 0.0
 		p.stun_timer = 0.0
 		p.kick_power = 0.0
+		p.hold_timer = 0.0
 		p.is_moving = false
 
 func _read_input() -> void:
@@ -652,11 +656,14 @@ func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_
 	for i in team.size():
 		var p := team[i]
 		p.is_moving = false
-		if kickoff_timer <= 0.0 and i == user_idx:
+		if kickoff_timer <= 0.0 and i == user_idx and _has_user_input(p):
 			_update_user_player(p, team_idx, i, delta)
 		elif kickoff_timer <= 0.0:
 			_update_ai_player(p, team, opponents, team_idx, i, delta)
 		_try_capture_ball(team, team_idx, i)
+
+func _has_user_input(p: PlayerState) -> bool:
+	return axis != Vector2.ZERO or shoot_pressed or shoot_was_pressed or p.kick_power > 0.0
 
 func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
 	var best := -1
@@ -697,6 +704,16 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		p.stun_timer -= delta
 	var current_speed := p.speed * (0.3 if p.stun_timer > 0.0 else 1.0)
 	if p.role == PlayerRole.GOALKEEPER:
+		if ball.owner_team == team_idx and ball.owner_index == player_idx:
+			p.hold_timer += delta
+			if p.hold_timer > 1.0:
+				var clear_target := _best_pass_target(p, team, opponents, -float(p.side) * FIELD_BOUNDARY_X)
+				if clear_target != null:
+					_kick_from_player(p, Vector2(clear_target.x, clear_target.y), 0.45, false)
+				else:
+					_kick_from_player(p, Vector2(-float(p.side) * 0.3, randf_range(-0.5, 0.5)), 0.7, false)
+			return
+		p.hold_timer = 0.0
 		var target_y := clampf(ball.y, -GOAL_HALF_WIDTH, GOAL_HALF_WIDTH)
 		var target_x := -FIELD_BOUNDARY_X if p.side == -1 else FIELD_BOUNDARY_X
 		_move_towards(p, Vector2(target_x, target_y), current_speed, delta)
@@ -711,11 +728,15 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		var advance := 0.25 if p.role == PlayerRole.DEFENDER else (0.50 if p.role == PlayerRole.MIDFIELDER else 0.78)
 		target = Vector2(p.start_x + attack_dir * advance, p.start_y * 0.7 + ball.y * 0.3)
 	else:
-		var dist := Vector2(p.x - ball.x, p.y - ball.y).length()
-		if dist < 0.55 or player_idx in [5, 6, 7, 8]:
-			target = Vector2(ball.x, ball.y)
+		var ball_owner := _owner_player()
+		if ball_owner != null and ball_owner.role == PlayerRole.GOALKEEPER:
+			target = Vector2(p.start_x, p.start_y)
 		else:
-			target = Vector2(p.start_x + (ball.x - p.start_x) * 0.15, p.start_y + (ball.y - p.start_y) * 0.25)
+			var dist := Vector2(p.x - ball.x, p.y - ball.y).length()
+			if dist < 0.55 or player_idx in [5, 6, 7, 8]:
+				target = Vector2(ball.x, ball.y)
+			else:
+				target = Vector2(p.start_x + (ball.x - p.start_x) * 0.15, p.start_y + (ball.y - p.start_y) * 0.25)
 	for mate in team:
 		if mate == p:
 			continue
@@ -728,11 +749,11 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
 	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
-	if dist_to_goal < 0.40 and randi() % 100 < 4:
+	if dist_to_goal < 0.40 and randf() < 2.4 * delta:
 		_kick_from_player(p, Vector2(target_goal_x, 0.0), 0.75, false)
 		ball.is_super_shot = true
 		return
-	if randi() % 100 < 3:
+	if randf() < 1.8 * delta:
 		var target := _best_pass_target(p, team, opponents, target_goal_x)
 		if target != null:
 			_kick_from_player(p, Vector2(target.x, target.y), 0.35, false)
@@ -786,14 +807,18 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.is_super_shot = user_shot and power > 0.5 and dist_to_goal < 0.65
 	ball.charging_power = 0.0
 	p.kick_power = 0.0
-	p.stun_timer = 0.25
+	p.hold_timer = 0.0
+	p.stun_timer = 0.25 if power > 0.5 else 0.1
 	_clear_owner()
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
 
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
 	var p := team[player_idx]
-	if Vector2(p.x - ball.x, p.y - ball.y).length() < 0.045:
+	var capture_radius := 0.045
+	if p.role == PlayerRole.GOALKEEPER:
+		capture_radius = 0.05 if ball.is_super_shot else 0.10
+	if Vector2(p.x - ball.x, p.y - ball.y).length() < capture_radius:
 		if ball.owner_team == -1 and p.stun_timer <= 0.0:
 			_set_owner(team_idx, player_idx)
 		elif ball.owner_team != -1 and _owner_side() != p.side and p.stun_timer <= 0.0:
@@ -889,7 +914,8 @@ func _update_camera(delta: float) -> void:
 		return
 	var target_pos := Vector3(clampf(ball.x * FIELD_SCALE * 0.25, -5.0, 5.0), 18.0, 24.0 + clampf(-ball.y * FIELD_SCALE * 0.12, -2.5, 2.5))
 	camera_rig.position = camera_rig.position.lerp(target_pos, 1.0 - exp(-1.8 * delta))
-	camera_3d.look_at(to_3d(Vector2(ball.x, ball.y), 0.2), Vector3.UP)
+	camera_look = camera_look.lerp(to_3d(Vector2(ball.x, ball.y), 0.2), 1.0 - exp(-3.5 * delta))
+	camera_3d.look_at(camera_look, Vector3.UP)
 
 func _update_scoreboard() -> void:
 	if score_label != null:
