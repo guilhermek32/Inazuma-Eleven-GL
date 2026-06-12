@@ -394,20 +394,22 @@ func _add_crowd_cards(field_x: float, field_z: float) -> void:
 	for row in 3:
 		for i in 22:
 			var x := -field_x * 1.12 + float(i) * (field_x * 2.24 / 21.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 2.0 + row * 0.48, -field_z - 3.8 - row * 0.42), Vector3(0.0, PI, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 2.0 + row * 0.48, field_z + 3.8 + row * 0.42), Vector3.ZERO)
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.25 + row * 0.62, -field_z - 3.6 - row * 0.55), Vector3(0.0, PI, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.25 + row * 0.62, field_z + 3.6 + row * 0.55), Vector3.ZERO)
 	for row in 2:
 		for i in 14:
 			var z := -field_z * 0.9 + float(i) * (field_z * 1.8 / 13.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 4.0 - row * 0.35, 2.0 + row * 0.48, z), Vector3(0.0, PI * 0.5, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 4.0 + row * 0.35, 2.0 + row * 0.48, z), Vector3(0.0, -PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 3.8 - row * 0.55, 1.25 + row * 0.62, z), Vector3(0.0, PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 3.8 + row * 0.55, 1.25 + row * 0.62, z), Vector3(0.0, -PI * 0.5, 0.0))
 
-func _add_fan_sprite(texture: Texture2D, pos: Vector3, rot: Vector3) -> void:
+func _add_fan_sprite(texture: Texture2D, feet_pos: Vector3, rot: Vector3) -> void:
 	var sprite := Sprite3D.new()
 	sprite.name = "CrowdCard"
 	sprite.texture = texture
-	sprite.pixel_size = 0.012
-	sprite.position = pos
+	var fan_height := 1.9
+	sprite.pixel_size = fan_height / float(texture.get_height())
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	sprite.position = feet_pos + Vector3(0.0, fan_height * 0.5, 0.0)
 	sprite.rotation = rot
 	stadium_root.add_child(sprite)
 
@@ -726,25 +728,35 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 	if own_team_has_ball:
 		var attack_dir := -float(p.side)
 		var advance := 0.25 if p.role == PlayerRole.DEFENDER else (0.50 if p.role == PlayerRole.MIDFIELDER else 0.78)
-		target = Vector2(p.start_x + attack_dir * advance, p.start_y * 0.7 + ball.y * 0.3)
+		target = Vector2(p.start_x + attack_dir * advance, p.start_y * 0.85 + ball.y * 0.15)
 	else:
 		var ball_owner := _owner_player()
 		if ball_owner != null and ball_owner.role == PlayerRole.GOALKEEPER:
 			target = Vector2(p.start_x, p.start_y)
+		elif _is_presser(team, player_idx):
+			target = Vector2(ball.x, ball.y)
 		else:
-			var dist := Vector2(p.x - ball.x, p.y - ball.y).length()
-			if dist < 0.55 or player_idx in [5, 6, 7, 8]:
-				target = Vector2(ball.x, ball.y)
-			else:
-				target = Vector2(p.start_x + (ball.x - p.start_x) * 0.15, p.start_y + (ball.y - p.start_y) * 0.25)
+			target = Vector2(p.start_x + (ball.x - p.start_x) * 0.2, p.start_y + (ball.y - p.start_y) * 0.25)
 	for mate in team:
 		if mate == p:
 			continue
 		var away := Vector2(p.x - mate.x, p.y - mate.y)
 		var d := away.length()
-		if d < 0.12 and d > 0.001:
-			target += away / d * 0.04
+		if d < 0.16 and d > 0.001:
+			target += away / d * 0.10
 	_move_towards(p, target, current_speed * (0.88 if own_team_has_ball else 0.95), delta)
+
+func _is_presser(team: Array[PlayerState], player_idx: int) -> bool:
+	var my_dist := Vector2(team[player_idx].x - ball.x, team[player_idx].y - ball.y).length()
+	var closer := 0
+	for i in team.size():
+		if i == player_idx or team[i].role == PlayerRole.GOALKEEPER:
+			continue
+		if Vector2(team[i].x - ball.x, team[i].y - ball.y).length() < my_dist:
+			closer += 1
+			if closer >= 2:
+				return false
+	return true
 
 func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
 	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
