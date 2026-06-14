@@ -17,6 +17,11 @@ const CENTER_CIRCLE_RADIUS := 0.16
 const CORNER_ARC_RADIUS := 0.035
 const FIELD_SCALE := 18.0
 const PITCH_Y := 0.0
+const BLUE_MODEL_SCALE := 0.9
+const BLUE_MODEL_TARGET_HEIGHT := 0.004
+const BLUE_MODEL_Y_OFFSET := 0.0
+const BLUE_MODEL_YAW_OFFSET := 180.0
+const BLUE_ASSET_DIR := "res://assets/obj_3d_player/"
 
 class PlayerState:
 	var x := 0.0
@@ -34,6 +39,12 @@ class PlayerState:
 	var is_moving := false
 	var is_targeting_ball := false
 	var node: Node3D
+	var uses_glb := false
+	var visual_model: Node3D
+	var animation_player: AnimationPlayer
+	var visual_state := ""
+	var visual_path := ""
+	var action_timer := 0.0
 
 	func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> void:
 		x = p_x
@@ -83,6 +94,7 @@ class InputSnapshot:
 enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME }
 
 var materials := {}
+var glb_scene_cache := {}
 var camera_rig: Node3D
 var camera_3d: Camera3D
 var pitch_root: Node3D
@@ -95,7 +107,6 @@ var vfx_root: Node3D
 var ui_layer: CanvasLayer
 var score_label: Label
 var timer_label: Label
-var scoreboard_3d_label: Label3D
 var team_red: Array[PlayerState] = []
 var team_blue: Array[PlayerState] = []
 var ball := BallState.new()
@@ -178,8 +189,14 @@ func _process(delta: float) -> void:
 			_update_team(team_blue, team_red, 1, num_players == 2, delta)
 			_update_match_clock(delta)
 		_update_visuals(delta)
-		_update_confetti(delta)
+	_update_confetti(delta)
 	_update_scoreboard()
+
+func _exit_tree() -> void:
+	for player in [music_player, sfx_kick, sfx_whistle]:
+		if player != null:
+			player.stop()
+			player.stream = null
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -360,8 +377,6 @@ func _build_lighting() -> void:
 		Vector3(24.0, 14.0, -19.0),
 		Vector3(-24.0, 14.0, 19.0),
 		Vector3(24.0, 14.0, 19.0),
-		Vector3(0.0, 16.0, -31.0),
-		Vector3(0.0, 16.0, 31.0),
 	]
 	for i in positions.size():
 		_add_floodlight(flood_root, positions[i], i)
@@ -651,14 +666,6 @@ func _add_scoreboard(pos: Vector3) -> void:
 		pole.mesh.top_radius = 0.09
 		pole.mesh.bottom_radius = 0.11
 		stadium_root.add_child(pole)
-	scoreboard_3d_label = Label3D.new()
-	scoreboard_3d_label.name = "ScoreboardText"
-	scoreboard_3d_label.text = "0 - 0"
-	scoreboard_3d_label.font_size = 96
-	scoreboard_3d_label.modulate = Color(0.45, 1.0, 0.55)
-	scoreboard_3d_label.position = pos + Vector3(0.0, 0.08, 0.18)
-	stadium_root.add_child(scoreboard_3d_label)
-	scoreboard_3d_label.look_at(Vector3.ZERO, Vector3.UP)
 
 func _add_crowd_cards(field_x: float, field_z: float) -> void:
 	var fan_textures: Array[Texture2D] = []
@@ -675,19 +682,19 @@ func _add_crowd_cards(field_x: float, field_z: float) -> void:
 	for row in 3:
 		for i in 22:
 			var x := -field_x * 1.12 + float(i) * (field_x * 2.24 / 21.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.25 + row * 0.62, -field_z - 3.6 - row * 0.55), Vector3(0.0, PI, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.25 + row * 0.62, field_z + 3.6 + row * 0.55), Vector3.ZERO)
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, -field_z - 4.05 - row * 0.72), Vector3(0.0, PI, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, field_z + 4.05 + row * 0.72), Vector3.ZERO)
 	for row in 2:
 		for i in 14:
 			var z := -field_z * 0.9 + float(i) * (field_z * 1.8 / 13.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 3.8 - row * 0.55, 1.25 + row * 0.62, z), Vector3(0.0, PI * 0.5, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 3.8 + row * 0.55, 1.25 + row * 0.62, z), Vector3(0.0, -PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 4.25 - row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 4.25 + row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, -PI * 0.5, 0.0))
 
 func _add_fan_sprite(texture: Texture2D, feet_pos: Vector3, rot: Vector3) -> void:
 	var sprite := Sprite3D.new()
 	sprite.name = "CrowdCard"
 	sprite.texture = texture
-	var fan_height := 1.9
+	var fan_height := 1.55
 	sprite.pixel_size = fan_height / float(texture.get_height())
 	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	sprite.position = feet_pos + Vector3(0.0, fan_height * 0.5, 0.0)
@@ -721,6 +728,8 @@ func _build_ui() -> void:
 # Audio
 # ---------------------------------------------------------------------------
 func _build_audio() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	bus_music = _add_audio_bus("Music")
 	bus_sfx = _add_audio_bus("SFX")
 	music_player = _make_stream_player("MusicPlayer", "res://assets/sound/background-sound.mp3", "Music", true)
@@ -847,7 +856,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (two controllers required)\nMove: Left stick    Aim: Right stick\nShoot: Cross / A  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
+	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (two controllers required)\nMove: Left stick    Aim: Right stick\nShoot: R1 / RB  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: _set_game_state(prev_menu_state))
 
@@ -1005,6 +1014,10 @@ func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, s
 	team.append(state)
 
 func _create_player_visual(state: PlayerState) -> Node3D:
+	if state.side == 1:
+		var blue_visual = _create_blue_player_visual(state)
+		if blue_visual != null:
+			return blue_visual
 	var root := Node3D.new()
 	root.name = "RedPlayer" if state.side == -1 else "BluePlayer"
 	var uniform: Material = materials.goalkeeper if state.role == PlayerRole.GOALKEEPER else (materials.player_red if state.side == -1 else materials.player_blue)
@@ -1041,6 +1054,154 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	power.visible = false
 	root.add_child(power)
 	return root
+
+func _create_blue_player_visual(state: PlayerState):
+	var root := Node3D.new()
+	root.name = "BlueGLBPlayer"
+	state.uses_glb = true
+	state.node = root
+	var marker := _mesh("SelectedRing", CylinderMesh.new(), materials.selection, Vector3(0.0, 0.035, 0.0))
+	marker.mesh.top_radius = 0.48
+	marker.mesh.bottom_radius = 0.48
+	marker.mesh.height = 0.025
+	marker.visible = false
+	root.add_child(marker)
+	var power := _mesh("PowerRing", CylinderMesh.new(), materials.power, Vector3(0.0, 0.07, 0.0))
+	power.mesh.top_radius = 0.64
+	power.mesh.bottom_radius = 0.64
+	power.mesh.height = 0.025
+	power.visible = false
+	root.add_child(power)
+	var idle_state := "gk_idle" if state.role == PlayerRole.GOALKEEPER else "idle"
+	_set_blue_visual_state(state, idle_state)
+	if state.visual_model == null:
+		state.uses_glb = false
+		root.free()
+		return null
+	return root
+
+func _set_blue_visual_state(p: PlayerState, state_name: String) -> void:
+	if not p.uses_glb or p.node == null:
+		return
+	if p.visual_state == state_name and p.visual_model != null:
+		return
+	var path := _blue_asset_path(p, state_name)
+	if p.visual_model != null and p.visual_path == path:
+		p.visual_state = state_name
+		return
+	var model: Node3D = _instantiate_glb(path)
+	if model == null:
+		return
+	if p.visual_model != null and is_instance_valid(p.visual_model):
+		p.visual_model.queue_free()
+	p.visual_model = model
+	p.visual_state = state_name
+	p.visual_path = path
+	model.name = "Model"
+	model.rotation_degrees = Vector3(0.0, BLUE_MODEL_YAW_OFFSET, 0.0)
+	p.node.add_child(model)
+	_normalize_blue_model(model)
+	p.animation_player = _find_animation_player(model)
+	if p.animation_player != null:
+		_play_first_animation(p.animation_player)
+		_normalize_blue_model(model)
+
+func _play_blue_action(p: PlayerState, state_name: String, duration: float) -> void:
+	if not p.uses_glb:
+		return
+	_set_blue_visual_state(p, state_name)
+	p.action_timer = duration
+
+func _blue_asset_path(p: PlayerState, state_name: String) -> String:
+	# Most action files in this asset pack are animation-only GLBs without meshes.
+	# Use the visible character mesh for the blue team; action files can be retargeted later.
+	return BLUE_ASSET_DIR + "Ch38_nonPBR.glb"
+
+func _instantiate_glb(path: String):
+	var packed: PackedScene = null
+	if glb_scene_cache.has(path):
+		packed = glb_scene_cache[path]
+	else:
+		if not ResourceLoader.exists(path, "PackedScene"):
+			glb_scene_cache[path] = null
+			return null
+		var res := ResourceLoader.load(path, "PackedScene")
+		packed = res as PackedScene
+		glb_scene_cache[path] = packed
+	if packed == null:
+		return null
+	var instance := packed.instantiate()
+	if instance is Node3D:
+		return instance
+	var wrapper := Node3D.new()
+	wrapper.add_child(instance)
+	return wrapper
+
+func _find_animation_player(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node
+	for child in node.get_children():
+		var found := _find_animation_player(child)
+		if found != null:
+			return found
+	return null
+
+func _play_first_animation(player: AnimationPlayer) -> void:
+	var names := player.get_animation_list()
+	for anim_name in names:
+		if String(anim_name).to_lower() != "reset":
+			player.play(anim_name)
+			return
+	if names.size() > 0:
+		player.play(names[0])
+
+func _normalize_blue_model(model: Node3D) -> void:
+	model.scale = Vector3.ONE
+	model.position = Vector3.ZERO
+	var bounds := _node_local_bounds(model)
+	if bounds.size.length() <= 0.001 or bounds.size.y <= 0.001:
+		model.scale = Vector3.ONE * BLUE_MODEL_SCALE
+		model.position = Vector3(0.0, BLUE_MODEL_Y_OFFSET, 0.0)
+		return
+	var scale := (BLUE_MODEL_TARGET_HEIGHT / bounds.size.y) * BLUE_MODEL_SCALE
+	var center := bounds.position + bounds.size * 0.5
+	model.scale = Vector3.ONE * scale
+	model.position = Vector3(-center.x * scale, BLUE_MODEL_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
+
+func _node_local_bounds(root: Node3D) -> AABB:
+	var state := [false, Vector3.ZERO, Vector3.ZERO]
+	_accumulate_local_bounds(root, Transform3D.IDENTITY, state)
+	if not state[0]:
+		return AABB()
+	return AABB(state[1], state[2] - state[1])
+
+func _accumulate_local_bounds(node: Node, parent_xform: Transform3D, state: Array) -> void:
+	var current := parent_xform
+	if node is Node3D:
+		current = parent_xform * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		var aabb: AABB = mesh_instance.get_aabb()
+		for i in 8:
+			var local_point: Vector3 = current * _aabb_corner(aabb, i)
+			if not state[0]:
+				state[1] = local_point
+				state[2] = local_point
+				state[0] = true
+			else:
+				var min_v: Vector3 = state[1]
+				var max_v: Vector3 = state[2]
+				state[1] = Vector3(minf(min_v.x, local_point.x), minf(min_v.y, local_point.y), minf(min_v.z, local_point.z))
+				state[2] = Vector3(maxf(max_v.x, local_point.x), maxf(max_v.y, local_point.y), maxf(max_v.z, local_point.z))
+	for child: Node in node.get_children():
+		_accumulate_local_bounds(child, current, state)
+
+func _aabb_corner(aabb: AABB, index: int) -> Vector3:
+	return aabb.position + Vector3(
+		aabb.size.x if index & 1 else 0.0,
+		aabb.size.y if index & 2 else 0.0,
+		aabb.size.z if index & 4 else 0.0
+	)
 
 func _create_ball() -> void:
 	var root := Node3D.new()
@@ -1130,7 +1291,8 @@ func _read_gamepad_input(snap: InputSnapshot, device: int, allow: bool) -> void:
 	if allow and move.length() > dead:
 		snap.axis = move if move.length() <= 1.0 else move.normalized()
 	snap.shoot_prev = snap.shoot_held
-	snap.shoot_held = allow and (Input.is_joy_button_pressed(device, JOY_BUTTON_A) or Input.get_joy_axis(device, JOY_AXIS_TRIGGER_RIGHT) > 0.5)
+	# Shoot is the right shoulder button: R1 on PlayStation, RB on Xbox (SDL-abstracted).
+	snap.shoot_held = allow and Input.is_joy_button_pressed(device, JOY_BUTTON_RIGHT_SHOULDER)
 	# Right stick aims as a direction relative to the player; world point computed at kick time.
 	var look := Vector2(Input.get_joy_axis(device, JOY_AXIS_RIGHT_X), -Input.get_joy_axis(device, JOY_AXIS_RIGHT_Y))
 	snap.aim_absolute = false
@@ -1283,20 +1445,27 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		var ball_owner := _owner_player()
 		if ball_owner != null and ball_owner.role == PlayerRole.GOALKEEPER:
 			target = Vector2(p.start_x, p.start_y)
-		elif _is_presser(team, player_idx):
+		elif _is_presser(team, player_idx, 1 if _ball_in_own_third(p.side) else 2):
 			target = Vector2(ball.x, ball.y)
 		else:
-			target = Vector2(p.start_x + (ball.x - p.start_x) * 0.2, p.start_y + (ball.y - p.start_y) * 0.25)
+			var ball_y_weight := 0.14 if _ball_in_own_third(p.side) else 0.25
+			target = Vector2(p.start_x + (ball.x - p.start_x) * 0.2, p.start_y + (ball.y - p.start_y) * ball_y_weight)
+			if _ball_in_own_third(p.side):
+				var deepest_x := FIELD_BOUNDARY_X - (0.14 if p.role == PlayerRole.DEFENDER else 0.24)
+				if p.side == 1:
+					target.x = minf(target.x, deepest_x)
+				else:
+					target.x = maxf(target.x, -deepest_x)
 	for mate in team:
 		if mate == p:
 			continue
 		var away := Vector2(p.x - mate.x, p.y - mate.y)
 		var d := away.length()
-		if d < 0.16 and d > 0.001:
-			target += away / d * 0.10
+		if d < 0.20 and d > 0.001:
+			target += away / d * 0.14
 	_move_towards(p, target, current_speed * (0.88 if own_team_has_ball else 0.95), delta)
 
-func _is_presser(team: Array[PlayerState], player_idx: int) -> bool:
+func _is_presser(team: Array[PlayerState], player_idx: int, press_limit: int) -> bool:
 	var my_dist := Vector2(team[player_idx].x - ball.x, team[player_idx].y - ball.y).length()
 	var closer := 0
 	for i in team.size():
@@ -1304,9 +1473,12 @@ func _is_presser(team: Array[PlayerState], player_idx: int) -> bool:
 			continue
 		if Vector2(team[i].x - ball.x, team[i].y - ball.y).length() < my_dist:
 			closer += 1
-			if closer >= 2:
+			if closer >= press_limit:
 				return false
 	return true
+
+func _ball_in_own_third(side: int) -> bool:
+	return ball.x * float(side) > 0.58
 
 func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
 	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
@@ -1375,6 +1547,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
 	_play_kick()
+	_play_blue_action(p, "kick", 0.7)
 
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
 	var p := team[player_idx]
@@ -1384,12 +1557,14 @@ func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int)
 	if Vector2(p.x - ball.x, p.y - ball.y).length() < capture_radius:
 		if ball.owner_team == -1 and p.stun_timer <= 0.0:
 			_set_owner(team_idx, player_idx)
+			_play_blue_action(p, "receive", 0.45)
 		elif ball.owner_team != -1 and _owner_side() != p.side and p.stun_timer <= 0.0:
 			var old := _owner_player()
 			if old != null and old.role != PlayerRole.GOALKEEPER:
 				old.stun_timer = 0.45
 				old.kick_power = 0.0
 				_set_owner(team_idx, player_idx)
+				_play_blue_action(p, "tackle", 0.55)
 
 func _move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
@@ -1428,6 +1603,9 @@ func _update_visuals(delta: float) -> void:
 func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
 	if p.node == null:
 		return
+	if p.uses_glb:
+		_update_blue_player_visual(p, owns_ball, delta)
+		return
 	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
 	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
 	if face.length() > 0.001:
@@ -1446,6 +1624,24 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 		p.node.position.y = absf(sin(Time.get_ticks_msec() * 0.018)) * 0.05
 	else:
 		p.node.position.y = 0.0
+
+func _update_blue_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
+	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
+	if face.length() > 0.001:
+		p.node.rotation.y = atan2(face.x, face.z)
+	if p.action_timer > 0.0:
+		p.action_timer = maxf(0.0, p.action_timer - delta)
+	else:
+		if p.role == PlayerRole.GOALKEEPER:
+			_set_blue_visual_state(p, "run" if p.is_moving else "gk_idle")
+		else:
+			_set_blue_visual_state(p, "run" if p.is_moving else "idle")
+	var is_selected := (num_players == 2 and team_blue.find(p) == selected_index[1])
+	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
+	var power_ring := p.node.get_node("PowerRing") as Node3D
+	power_ring.visible = p.kick_power > 0.01
+	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
 
 func _update_ball_visual(delta: float) -> void:
 	if ball.node == null:
@@ -1484,8 +1680,6 @@ func _update_camera(delta: float) -> void:
 func _update_scoreboard() -> void:
 	if score_label != null:
 		score_label.text = "%d - %d" % [score_left, score_right]
-	if scoreboard_3d_label != null:
-		scoreboard_3d_label.text = "%d - %d" % [score_left, score_right]
 	if timer_label != null:
 		if game_state != GameState.PLAYING:
 			timer_label.text = ""

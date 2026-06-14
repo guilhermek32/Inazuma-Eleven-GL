@@ -60,6 +60,25 @@ The 3D build includes:
 - Scoreboard UI and emissive 3D scoreboard text.
 - Goal celebration confetti.
 
+## Blue Team GLB Players
+
+Blue team players load animated `.glb` assets from:
+
+- `assets/obj_3d_player/`
+
+Runtime behavior:
+
+- Goalkeeper uses goalkeeper idle/pass/catch/sidestep GLBs.
+- Outfield players use offensive idle, jog, kick, receive, and tackle GLBs.
+- Red team remains procedural for visual contrast and fallback safety.
+- If a GLB is not imported or fails to load, the player falls back to the procedural mesh.
+
+If the imported model faces the wrong way or has wrong scale, tune these constants in `scripts/match_controller_3d.gd`:
+
+- `BLUE_MODEL_SCALE`
+- `BLUE_MODEL_Y_OFFSET`
+- `BLUE_MODEL_YAW_OFFSET`
+
 ## Next C++ GDExtension Step
 
 After gameplay parity is confirmed in Godot, move the pure model parts from `scripts/match_controller.gd` into a `godot-cpp` GDExtension:
