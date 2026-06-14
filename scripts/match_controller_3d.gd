@@ -10,6 +10,11 @@ const GOAL_HALF_WIDTH := 0.18
 const GOAL_DEPTH := 0.05
 const PENALTY_AREA_WIDTH := 0.22
 const PENALTY_AREA_HEIGHT := 0.32
+const GOAL_AREA_WIDTH := 0.10
+const GOAL_AREA_HEIGHT := 0.20
+const PENALTY_SPOT_DIST := 0.15
+const CENTER_CIRCLE_RADIUS := 0.16
+const CORNER_ARC_RADIUS := 0.035
 const FIELD_SCALE := 18.0
 const PITCH_Y := 0.0
 
@@ -127,16 +132,27 @@ func _process(delta: float) -> void:
 	_update_scoreboard()
 
 func _build_materials() -> void:
-	materials.grass = _material(Color(0.08, 0.42, 0.13), 0.85, 0.0, _checker_texture(Color(0.06, 0.35, 0.10), Color(0.13, 0.53, 0.18), 128, 8))
-	materials.grass_dark = _material(Color(0.06, 0.33, 0.10), 0.9)
+	materials.grass = _material(Color.WHITE, 0.9, 0.0, _noise_texture(Color(0.10, 0.35, 0.13), 0.05))
+	materials.grass_dark = _material(Color.WHITE, 0.9, 0.0, _noise_texture(Color(0.088, 0.315, 0.115), 0.05))
 	materials.line = _material(Color(0.95, 0.97, 0.92), 0.55)
 	materials.goal = _material(Color(0.92, 0.93, 0.90), 0.28, 0.25)
-	materials.net = _material(Color(0.86, 0.92, 1.0, 0.34), 0.72)
+	materials.net = _material(Color(1.0, 1.0, 1.0, 0.99), 0.7, 0.0, _net_texture())
 	materials.concrete = _material(Color(0.37, 0.36, 0.34), 0.92, 0.0, _checker_texture(Color(0.28, 0.28, 0.27), Color(0.45, 0.44, 0.41), 128, 16))
+	materials.asphalt = _material(Color.WHITE, 0.95, 0.0, _noise_texture(Color(0.125, 0.13, 0.145), 0.06))
+	materials.wall = _material(Color(0.15, 0.16, 0.18), 0.95)
+	materials.wall_top = _emission_material(Color(0.95, 0.88, 0.70), 0.5)
+	materials.flag = _emission_material(Color(1.0, 0.85, 0.15), 0.8)
 	materials.seat_red = _material(Color(0.55, 0.06, 0.05), 0.65)
 	materials.seat_blue = _material(Color(0.04, 0.10, 0.55), 0.65)
 	materials.metal_dark = _material(Color(0.20, 0.21, 0.22), 0.38, 0.55)
-	materials.light_emission = _emission_material(Color(1.0, 0.94, 0.72), 2.0)
+	materials.light_emission = _emission_material(Color(1.0, 0.94, 0.72), 3.5)
+	materials.ad_panels = [
+		_emission_material(Color(0.92, 0.94, 0.98), 1.0),
+		_emission_material(Color(0.10, 0.30, 0.95), 1.0),
+		_emission_material(Color(0.90, 0.12, 0.10), 1.0),
+		_emission_material(Color(1.0, 0.78, 0.10), 1.0),
+	]
+	materials.ad_text_colors = [Color(0.08, 0.10, 0.25), Color.WHITE, Color.WHITE, Color(0.15, 0.10, 0.02)]
 	materials.scoreboard = _emission_material(Color(0.1, 0.85, 0.25), 1.4)
 	materials.player_red = _material(Color(0.85, 0.05, 0.03), 0.58)
 	materials.player_blue = _material(Color(0.04, 0.20, 0.88), 0.58)
@@ -173,19 +189,20 @@ func _build_environment() -> void:
 	var env := Environment.new()
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.18, 0.35, 0.62)
-	sky_mat.sky_horizon_color = Color(0.72, 0.80, 0.90)
-	sky_mat.ground_bottom_color = Color(0.05, 0.08, 0.07)
-	sky_mat.ground_horizon_color = Color(0.18, 0.22, 0.18)
+	sky_mat.sky_top_color = Color(0.010, 0.018, 0.045)
+	sky_mat.sky_horizon_color = Color(0.055, 0.075, 0.13)
+	sky_mat.ground_bottom_color = Color(0.010, 0.012, 0.02)
+	sky_mat.ground_horizon_color = Color(0.04, 0.05, 0.08)
 	sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.38
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.45, 0.55, 0.78)
+	env.ambient_light_energy = 0.4
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.glow_enabled = true
-	env.glow_intensity = 0.35
-	env.glow_bloom = 0.25
+	env.glow_intensity = 0.5
+	env.glow_bloom = 0.3
 	world.environment = env
 	add_child(world)
 
@@ -202,14 +219,14 @@ func _build_camera() -> void:
 	camera_3d.look_at(Vector3.ZERO, Vector3.UP)
 
 func _build_lighting() -> void:
-	var sun := DirectionalLight3D.new()
-	sun.name = "SunLight"
-	sun.light_color = Color(1.0, 0.92, 0.78)
-	sun.light_energy = 1.15
-	sun.shadow_enabled = true
-	sun.light_angular_distance = 0.8
-	sun.rotation_degrees = Vector3(-52.0, -34.0, 0.0)
-	add_child(sun)
+	var moon := DirectionalLight3D.new()
+	moon.name = "MoonLight"
+	moon.light_color = Color(0.60, 0.68, 0.88)
+	moon.light_energy = 0.3
+	moon.shadow_enabled = false
+	moon.light_angular_distance = 0.8
+	moon.rotation_degrees = Vector3(-52.0, -34.0, 0.0)
+	add_child(moon)
 	var flood_root := Node3D.new()
 	flood_root.name = "FloodLights"
 	add_child(flood_root)
@@ -241,8 +258,8 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	var spot := SpotLight3D.new()
 	spot.name = "SpotLight3D"
 	spot.light_color = Color(0.78, 0.88, 1.0)
-	spot.light_energy = 4.5
-	spot.spot_range = 52.0
+	spot.light_energy = 7.0
+	spot.spot_range = 60.0
 	spot.spot_angle = 48.0
 	spot.light_size = 1.2
 	spot.shadow_enabled = index < 4
@@ -263,24 +280,69 @@ func _build_pitch() -> void:
 	_add_field_lines()
 
 func _add_field_lines() -> void:
-	var x := FIELD_HALF_WIDTH * FIELD_SCALE
-	var z := FIELD_HALF_HEIGHT * FIELD_SCALE
+	var x := FIELD_BOUNDARY_X * FIELD_SCALE
+	var z := FIELD_BOUNDARY_Y * FIELD_SCALE
 	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(x, 0.06, -z), 0.07, "SidelineTop")
 	_add_line_segment(Vector3(-x, 0.06, z), Vector3(x, 0.06, z), 0.07, "SidelineBottom")
 	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(-x, 0.06, z), 0.07, "EndlineLeft")
 	_add_line_segment(Vector3(x, 0.06, -z), Vector3(x, 0.06, z), 0.07, "EndlineRight")
 	_add_line_segment(Vector3(0.0, 0.065, -z), Vector3(0.0, 0.065, z), 0.06, "HalfwayLine")
-	_add_circle(Vector3.ZERO, 0.16 * FIELD_SCALE, 64, 0.055, "CenterCircle")
-	_add_penalty_box(-1)
-	_add_penalty_box(1)
+	_add_circle(Vector3.ZERO, CENTER_CIRCLE_RADIUS * FIELD_SCALE, 64, 0.055, "CenterCircle")
+	_add_spot(Vector3(0.0, 0.055, 0.0), "CenterSpot")
+	for side in [-1, 1]:
+		_add_box_lines(side, PENALTY_AREA_WIDTH, PENALTY_AREA_HEIGHT, "Penalty")
+		_add_box_lines(side, GOAL_AREA_WIDTH, GOAL_AREA_HEIGHT, "GoalArea")
+		_add_penalty_arc(side)
+		_add_spot(Vector3((FIELD_BOUNDARY_X - PENALTY_SPOT_DIST) * FIELD_SCALE * float(side), 0.055, 0.0), "PenaltySpot%d" % side)
+	for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]:
+		_add_corner_arc(corner)
+		_add_corner_flag(corner)
 
-func _add_penalty_box(side: int) -> void:
+func _add_box_lines(side: int, depth: float, half_z: float, prefix: String) -> void:
 	var xb := FIELD_BOUNDARY_X * FIELD_SCALE * float(side)
-	var xi := (FIELD_BOUNDARY_X - PENALTY_AREA_WIDTH) * FIELD_SCALE * float(side)
-	var z := PENALTY_AREA_HEIGHT * FIELD_SCALE
-	_add_line_segment(Vector3(xb, 0.07, -z), Vector3(xi, 0.07, -z), 0.055, "PenaltyA%d" % side)
-	_add_line_segment(Vector3(xb, 0.07, z), Vector3(xi, 0.07, z), 0.055, "PenaltyB%d" % side)
-	_add_line_segment(Vector3(xi, 0.07, -z), Vector3(xi, 0.07, z), 0.055, "PenaltyC%d" % side)
+	var xi := (FIELD_BOUNDARY_X - depth) * FIELD_SCALE * float(side)
+	var z := half_z * FIELD_SCALE
+	_add_line_segment(Vector3(xb, 0.07, -z), Vector3(xi, 0.07, -z), 0.055, "%sA%d" % [prefix, side])
+	_add_line_segment(Vector3(xb, 0.07, z), Vector3(xi, 0.07, z), 0.055, "%sB%d" % [prefix, side])
+	_add_line_segment(Vector3(xi, 0.07, -z), Vector3(xi, 0.07, z), 0.055, "%sC%d" % [prefix, side])
+
+func _add_penalty_arc(side: int) -> void:
+	var radius := CENTER_CIRCLE_RADIUS * FIELD_SCALE
+	var spot_x := (FIELD_BOUNDARY_X - PENALTY_SPOT_DIST) * FIELD_SCALE * float(side)
+	var box_x := (FIELD_BOUNDARY_X - PENALTY_AREA_WIDTH) * FIELD_SCALE * float(side)
+	var half_angle := acos(absf(box_x - spot_x) / radius)
+	var facing := PI if side == 1 else 0.0
+	_add_arc(Vector3(spot_x, 0.075, 0.0), radius, facing - half_angle, facing + half_angle, 18, 0.055, "PenaltyArc%d" % side)
+
+func _add_corner_arc(corner: Vector2) -> void:
+	var center := Vector3(FIELD_BOUNDARY_X * FIELD_SCALE * corner.x, 0.075, FIELD_BOUNDARY_Y * FIELD_SCALE * corner.y)
+	var a_start := 0.0
+	if corner == Vector2(1, -1):
+		a_start = PI * 0.5
+	elif corner == Vector2(1, 1):
+		a_start = PI
+	elif corner == Vector2(-1, 1):
+		a_start = PI * 1.5
+	_add_arc(center, CORNER_ARC_RADIUS * FIELD_SCALE, a_start, a_start + PI * 0.5, 8, 0.05, "CornerArc%d%d" % [corner.x, corner.y])
+
+func _add_corner_flag(corner: Vector2) -> void:
+	var x := FIELD_BOUNDARY_X * FIELD_SCALE * corner.x
+	var z := FIELD_BOUNDARY_Y * FIELD_SCALE * corner.y
+	var pole := _mesh("CornerPole%d%d" % [corner.x, corner.y], CylinderMesh.new(), materials.goal, Vector3(x, 0.75, z))
+	pole.mesh.height = 1.5
+	pole.mesh.top_radius = 0.022
+	pole.mesh.bottom_radius = 0.022
+	pitch_root.add_child(pole)
+	var flag := _mesh("CornerFlag%d%d" % [corner.x, corner.y], BoxMesh.new(), materials.flag, Vector3(x - corner.x * 0.2, 1.36, z))
+	flag.mesh.size = Vector3(0.38, 0.24, 0.02)
+	pitch_root.add_child(flag)
+
+func _add_spot(pos: Vector3, node_name: String) -> void:
+	var spot := _mesh(node_name, CylinderMesh.new(), materials.line, pos)
+	spot.mesh.top_radius = 0.12
+	spot.mesh.bottom_radius = 0.12
+	spot.mesh.height = 0.02
+	lines_root.add_child(spot)
 
 func _add_circle(center: Vector3, radius: float, segments: int, width: float, node_name: String) -> void:
 	for i in segments:
@@ -288,6 +350,14 @@ func _add_circle(center: Vector3, radius: float, segments: int, width: float, no
 		var a1 := float(i + 1) / float(segments) * TAU
 		var p0 := center + Vector3(cos(a0) * radius, 0.075, sin(a0) * radius)
 		var p1 := center + Vector3(cos(a1) * radius, 0.075, sin(a1) * radius)
+		_add_line_segment(p0, p1, width, "%s%d" % [node_name, i])
+
+func _add_arc(center: Vector3, radius: float, a_start: float, a_end: float, segments: int, width: float, node_name: String) -> void:
+	for i in segments:
+		var a0 := lerpf(a_start, a_end, float(i) / float(segments))
+		var a1 := lerpf(a_start, a_end, float(i + 1) / float(segments))
+		var p0 := center + Vector3(cos(a0) * radius, 0.0, sin(a0) * radius)
+		var p1 := center + Vector3(cos(a1) * radius, 0.0, sin(a1) * radius)
 		_add_line_segment(p0, p1, width, "%s%d" % [node_name, i])
 
 func _add_line_segment(a: Vector3, b: Vector3, width: float, node_name: String) -> void:
@@ -322,9 +392,19 @@ func _add_goal(side: int) -> void:
 	goal.add_child(back_bar)
 	goal.add_child(top_depth_a)
 	goal.add_child(top_depth_b)
-	var net := _mesh("Net", BoxMesh.new(), materials.net, Vector3(x + depth * 0.5, height * 0.52, 0.0))
-	net.mesh.size = Vector3(absf(depth), height, half_w * 2.0)
-	goal.add_child(net)
+	var net_back := _net_panel("NetBack", Vector3(x + depth, height * 0.5, 0.0), Vector3(0.03, height, half_w * 2.0))
+	goal.add_child(net_back)
+	var net_top := _net_panel("NetTop", Vector3(x + depth * 0.5, height, 0.0), Vector3(absf(depth), 0.03, half_w * 2.0))
+	goal.add_child(net_top)
+	for net_side in [-1.0, 1.0]:
+		var panel := _net_panel("NetSide%d" % net_side, Vector3(x + depth * 0.5, height * 0.5, half_w * net_side), Vector3(absf(depth), height, 0.03))
+		goal.add_child(panel)
+
+func _net_panel(panel_name: String, pos: Vector3, size: Vector3) -> MeshInstance3D:
+	var panel := _mesh(panel_name, BoxMesh.new(), materials.net, pos)
+	panel.mesh.size = size
+	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return panel
 
 func _goal_post(pos: Vector3) -> MeshInstance3D:
 	var post := _mesh("Post", CylinderMesh.new(), materials.goal, pos)
@@ -344,12 +424,82 @@ func _goal_bar(pos: Vector3, length: float, rot_degrees: Vector3) -> MeshInstanc
 func _build_stadium() -> void:
 	var field_x := FIELD_HALF_WIDTH * FIELD_SCALE
 	var field_z := FIELD_HALF_HEIGHT * FIELD_SCALE
+	_add_ground_apron()
+	_add_perimeter_walls()
 	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - 5.0), Vector3(field_x * 2.5, 2.0, 5.0), materials.concrete)
 	_add_stand("SouthStand", Vector3(0.0, 1.0, field_z + 5.0), Vector3(field_x * 2.5, 2.0, 5.0), materials.concrete)
 	_add_stand("WestStand", Vector3(-field_x - 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), materials.concrete)
 	_add_stand("EastStand", Vector3(field_x + 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), materials.concrete)
 	_add_crowd_cards(field_x, field_z)
+	_add_hoardings()
 	_add_scoreboard(Vector3(0.0, 5.2, -field_z - 7.8))
+
+func _add_ground_apron() -> void:
+	var apron := _mesh("GroundApron", BoxMesh.new(), materials.asphalt, Vector3(0.0, -0.06, 0.0))
+	apron.mesh.size = Vector3(72.0, 0.08, 68.0)
+	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	stadium_root.add_child(apron)
+
+func _add_perimeter_walls() -> void:
+	var walls := [
+		["NorthWall", Vector3(0.0, 4.0, -33.7), Vector3(72.0, 8.0, 0.6)],
+		["SouthWall", Vector3(0.0, 4.0, 33.7), Vector3(72.0, 8.0, 0.6)],
+		["WestWall", Vector3(-35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
+		["EastWall", Vector3(35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
+	]
+	for w in walls:
+		var wall := _mesh(w[0], BoxMesh.new(), materials.wall, w[1])
+		wall.mesh.size = w[2]
+		stadium_root.add_child(wall)
+		var band := _mesh("%sBand" % w[0], BoxMesh.new(), materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
+		band.mesh.size = Vector3(maxf(w[2].x, 0.8), 0.7, maxf(w[2].z, 0.8))
+		stadium_root.add_child(band)
+	var sign := Label3D.new()
+	sign.name = "StadiumSign"
+	sign.text = "INAZUMA STADIUM"
+	sign.font_size = 260
+	sign.modulate = Color(0.98, 0.92, 0.72)
+	sign.position = Vector3(0.0, 6.5, -33.3)
+	stadium_root.add_child(sign)
+
+func _add_hoardings() -> void:
+	var ads := ["INAZUMA", "RAIMON FC", "ELEVEN TV", "KICK & GO", "SUPERNOVA", "GOAL MART", "METEOR LTD", "STRIKER+"]
+	var bx := FIELD_BOUNDARY_X * FIELD_SCALE
+	var bz := FIELD_BOUNDARY_Y * FIELD_SCALE
+	var idx := 0
+	for i in 8:
+		var x := -13.65 + float(i) * 3.9
+		_add_hoarding(Vector3(x, 0.0, -bz - 1.7), 0.0, ads[idx % ads.size()], idx)
+		idx += 1
+		_add_hoarding(Vector3(x, 0.0, bz + 1.7), PI, ads[idx % ads.size()], idx)
+		idx += 1
+	for i in 5:
+		var z := -7.8 + float(i) * 3.9
+		_add_hoarding(Vector3(-bx - 2.2, 0.0, z), PI * 0.5, ads[idx % ads.size()], idx)
+		idx += 1
+		_add_hoarding(Vector3(bx + 2.2, 0.0, z), -PI * 0.5, ads[idx % ads.size()], idx)
+		idx += 1
+
+func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
+	var board := Node3D.new()
+	board.name = "Hoarding%d" % idx
+	board.position = pos
+	board.rotation = Vector3(-0.12, yaw, 0.0)
+	stadium_root.add_child(board)
+	var frame := _mesh("Frame", BoxMesh.new(), materials.metal_dark, Vector3(0.0, 0.46, -0.04))
+	frame.mesh.size = Vector3(3.7, 0.92, 0.08)
+	board.add_child(frame)
+	var scheme: int = idx % materials.ad_panels.size()
+	var panel := _mesh("Panel", BoxMesh.new(), materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
+	panel.mesh.size = Vector3(3.55, 0.78, 0.05)
+	board.add_child(panel)
+	var label := Label3D.new()
+	label.name = "AdText"
+	label.text = text
+	label.font_size = 96
+	label.modulate = materials.ad_text_colors[scheme]
+	label.position = Vector3(0.0, 0.46, 0.06)
+	board.add_child(label)
 
 func _add_stand(stand_name: String, pos: Vector3, size: Vector3, mat: StandardMaterial3D) -> void:
 	var stand := Node3D.new()
@@ -370,6 +520,12 @@ func _add_scoreboard(pos: Vector3) -> void:
 	board.mesh.size = Vector3(5.2, 1.8, 0.18)
 	stadium_root.add_child(board)
 	board.look_at(Vector3.ZERO, Vector3.UP)
+	for pole_side in [-1.0, 1.0]:
+		var pole := _mesh("ScoreboardPole%d" % pole_side, CylinderMesh.new(), materials.metal_dark, Vector3(pole_side * 1.8, pos.y * 0.5 - 0.45, pos.z))
+		pole.mesh.height = pos.y - 0.9
+		pole.mesh.top_radius = 0.09
+		pole.mesh.bottom_radius = 0.11
+		stadium_root.add_child(pole)
 	scoreboard_3d_label = Label3D.new()
 	scoreboard_3d_label.name = "ScoreboardText"
 	scoreboard_3d_label.text = "0 - 0"
@@ -1022,6 +1178,27 @@ func _checker_texture(a: Color, b: Color, size: int, cells: int) -> Texture2D:
 		for x in size:
 			var use_a := ((x / cells) + (y / cells)) % 2 == 0
 			img.set_pixel(x, y, a if use_a else b)
+	return ImageTexture.create_from_image(img)
+
+func _noise_texture(base: Color, variation: float, size := 128) -> Texture2D:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x1EE7
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	for y in size:
+		for x in size:
+			var f := 1.0 + rng.randf_range(-variation, variation)
+			img.set_pixel(x, y, Color(base.r * f, base.g * f, base.b * f))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+func _net_texture(size := 64, step := 8) -> Texture2D:
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	img.fill(Color(1.0, 1.0, 1.0, 0.0))
+	for y in size:
+		for x in size:
+			if x % step == 0 or y % step == 0:
+				img.set_pixel(x, y, Color(0.92, 0.95, 1.0, 0.8))
+	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 func to_3d(p: Vector2, height := 0.0) -> Vector3:
