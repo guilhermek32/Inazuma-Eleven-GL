@@ -97,7 +97,7 @@ func _reset_players(team: Array[PlayerState]) -> void:
 	for p in team:
 		p.x = p.start_x
 		p.y = p.start_y
-		p.facing_x = float(p.side)
+		p.facing_x = -float(p.side)
 		p.facing_y = 0.0
 		p.stun_timer = 0.0
 		p.kick_power = 0.0
@@ -349,15 +349,15 @@ func _flip_player_end(p: PlayerState) -> void:
 	p.side *= -1
 	p.start_x *= -1.0
 	p.x *= -1.0
-	p.facing_x = float(p.side)
+	p.facing_x = -float(p.side)
 	p.facing_y = 0.0
 
 func _set_default_ends() -> void:
 	for p in team_red:
 		p.side = -1
 		p.start_x = -absf(p.start_x)
-		p.facing_x = -1.0
+		p.facing_x = 1.0
 	for p in team_blue:
 		p.side = 1
 		p.start_x = absf(p.start_x)
-		p.facing_x = 1.0
+		p.facing_x = -1.0

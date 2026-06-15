@@ -36,7 +36,7 @@ func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> 
 	side = p_side
 	role = p_role
 	team_index = 0 if p_side == -1 else 1
-	facing_x = float(p_side)
+	facing_x = -float(p_side)
 
 ## Crossfades the GLB skeleton to a named looping clip (idle/run/gk_idle).
 ## No-op for the procedural box-figure fallback or an unknown clip.
