@@ -1,8 +1,14 @@
 extends Node3D
 
+## Match controller / orchestrator for the 3D build.
+##
+## This is the script attached to scenes/main_3d.tscn. It owns no gameplay or
+## rendering logic itself: _ready() builds the scene roots and wires the focused
+## modules together (config/, data/, build/, systems/), _process() delegates to
+## the simulation and the view, and the rest is the game-state machine and match
+## clock. See CLAUDE.md for the module map.
 
-
-
+# Scene roots (created in _build_scene_roots, populated by the builders)
 var camera_rig: Node3D
 var camera_3d: Camera3D
 var pitch_root: Node3D
@@ -12,6 +18,8 @@ var stadium_root: Node3D
 var players_root: Node3D
 var ball_root: Node3D
 var vfx_root: Node3D
+
+# Subsystems
 var material_factory: MaterialFactory
 var pitch_builder: PitchBuilder
 var stadium_builder: StadiumBuilder
@@ -32,10 +40,6 @@ var num_players := 1
 var match_time := 0.0
 var current_half := 1
 var halftime_pause := 0.0
-
-# Settings (defaults; overridden by _load_settings)
-
-# Menu / audio nodes
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
