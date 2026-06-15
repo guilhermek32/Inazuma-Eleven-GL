@@ -28,8 +28,8 @@ func step(delta: float, num_players: int) -> int:
 	var scorer := _update_ball(delta)
 	if scorer != 0:
 		view._trigger_goal(scorer)
-	_update_team(team_red, team_blue, 0, true, delta)
-	_update_team(team_blue, team_red, 1, num_players == 2, delta)
+	_update_team(team_red, team_blue, 0, true, false, delta)
+	_update_team(team_blue, team_red, 1, num_players == 2, num_players < 2, delta)
 	return scorer
 
 func _create_teams() -> void:
@@ -85,6 +85,10 @@ func _reset_game(kickoff_side: int) -> void:
 		owner.x = 0.0
 		owner.y = 0.0
 	kickoff_timer = 2.0
+	# Start the user selection on the kickoff player (midfielder index 5 on red),
+	# or on whichever red player is nearest the ball if red is not kicking off.
+	selected_index[0] = _nearest_user_player(team_red, 0)
+	selected_index[1] = -1
 
 func _reset_players(team: Array[PlayerState]) -> void:
 	for p in team:
@@ -156,22 +160,40 @@ func _score_goal_against(goal_side: int) -> int:
 	_reset_game(goal_side)
 	return 1
 
-func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, is_user_team: bool, delta: float) -> void:
-	var user_idx := _nearest_user_player(team, team_idx) if is_user_team else -1
-	selected_index[team_idx] = user_idx
+func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, is_user_team: bool, is_opponent: bool, delta: float) -> void:
 	var snap: InputSnapshot = inputs[team_idx] if is_user_team else null
+	if is_user_team and kickoff_timer <= 0.0:
+		_handle_user_selection(team, team_idx, snap)
+	var user_idx := selected_index[team_idx] if is_user_team else -1
 	for i in team.size():
 		var p := team[i]
 		p.is_moving = false
-		if kickoff_timer <= 0.0 and i == user_idx and _has_user_input(snap, p):
-			_update_user_player(p, snap, team_idx, i, delta)
+		if kickoff_timer <= 0.0 and is_user_team and i == user_idx:
+			_update_user_player(p, snap, team_idx, i, delta, team, opponents)
 		elif kickoff_timer <= 0.0:
-			ai._update_ai_player(p, team, opponents, team_idx, i, delta)
+			ai._update_ai_player(p, team, opponents, team_idx, i, delta, is_opponent)
 		if kickoff_timer <= 0.0:
 			_try_capture_ball(team, team_idx, i)
 
-func _has_user_input(snap: InputSnapshot, p: PlayerState) -> bool:
-	return snap.axis != Vector2.ZERO or snap.shoot_held or snap.shoot_prev or p.kick_power > 0.0
+func _handle_user_selection(team: Array[PlayerState], team_idx: int, snap: InputSnapshot) -> void:
+	# Auto-switch to whoever just captured the ball for this team.
+	if ball.owner_team == team_idx:
+		var cur := selected_index[team_idx]
+		if cur < 0 or ball.owner_index != cur:
+			selected_index[team_idx] = ball.owner_index
+	# Manual switch: pick the nearest non-selected outfield player.
+	if snap != null and snap.switch_pressed:
+		var cur := selected_index[team_idx]
+		var best := cur
+		var best_dist := INF
+		for i in team.size():
+			if i == cur or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
+				continue
+			var d := Vector2(team[i].x - ball.x, team[i].y - ball.y).length()
+			if d < best_dist:
+				best_dist = d
+				best = i
+		selected_index[team_idx] = best
 
 func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
 	var best := -1
@@ -185,7 +207,7 @@ func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
 			best_dist = d
 	return best
 
-func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, player_idx: int, delta: float) -> void:
+func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, player_idx: int, delta: float, team: Array[PlayerState], opponents: Array[PlayerState]) -> void:
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
 	var speed_mult := 0.3 if p.stun_timer > 0.0 else 1.0
@@ -200,7 +222,12 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 		_clamp_player(p)
 	if ball.owner_team == team_idx and ball.owner_index == player_idx:
 		ball.charging_power = p.kick_power
-		if snap.shoot_held:
+		if snap.pass_pressed:
+			var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
+			var pass_target := ai._best_pass_target(p, team, opponents, target_goal_x)
+			if pass_target != null:
+				_kick_from_player(p, Vector2(pass_target.x, pass_target.y), 0.35, false)
+		elif snap.shoot_held:
 			p.kick_power = minf(1.0, p.kick_power + delta * 2.0)
 		elif snap.shoot_prev:
 			_kick_from_player(p, _aim_target(snap, p), p.kick_power, true)

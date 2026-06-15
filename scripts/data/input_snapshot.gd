@@ -10,3 +10,5 @@ var shoot_held := false
 var shoot_prev := false
 var aim_vec := Vector2.ZERO
 var aim_absolute := true
+var pass_pressed := false
+var switch_pressed := false

@@ -9,10 +9,11 @@ extends RefCounted
 
 var sim
 
-func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float) -> void:
+func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float, is_opponent: bool) -> void:
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
-	var current_speed: float = p.speed * sim.settings.ai_speed_mult * (0.3 if p.stun_timer > 0.0 else 1.0)
+	var speed_scale: float = sim.settings.ai_speed_mult if is_opponent else 1.0
+	var current_speed: float = p.speed * speed_scale * (0.3 if p.stun_timer > 0.0 else 1.0)
 	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		if sim.ball.owner_team == team_idx and sim.ball.owner_index == player_idx:
 			p.hold_timer += delta
@@ -29,7 +30,8 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		sim._move_towards(p, Vector2(target_x, target_y), current_speed, delta)
 		return
 	if sim.ball.owner_team == team_idx and sim.ball.owner_index == player_idx:
-		_update_ai_owner(p, team, opponents, delta)
+		var decision_scale: float = sim.settings.ai_decision_mult if is_opponent else 1.0
+		_update_ai_owner(p, team, opponents, delta, decision_scale)
 		return
 	var own_team_has_ball: bool = sim.ball.owner_team == team_idx
 	var target := Vector2(p.start_x, p.start_y)
@@ -41,7 +43,7 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		var ball_owner: PlayerState = sim._owner_player()
 		if ball_owner != null and ball_owner.role == GameConfig.PlayerRole.GOALKEEPER:
 			target = Vector2(p.start_x, p.start_y)
-		elif _is_presser(team, player_idx, 1 if _ball_in_own_third(p.side) else 2):
+		elif _is_presser(team, player_idx, 1):
 			target = Vector2(sim.ball.x, sim.ball.y)
 		else:
 			var ball_y_weight := 0.14 if _ball_in_own_third(p.side) else 0.25
@@ -61,19 +63,46 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 			target += away / d * 0.14
 	sim._move_towards(p, target, current_speed * (0.88 if own_team_has_ball else 0.95), delta)
 
-func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
+
+func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float, decision_scale: float) -> void:
 	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
-	if dist_to_goal < 0.40 and randf() < 2.4 * sim.settings.ai_decision_mult * delta:
-		sim._kick_from_player(p, Vector2(target_goal_x, 0.0), 0.75, false)
-		sim.ball.is_super_shot = true
-		return
-	if randf() < 1.8 * sim.settings.ai_decision_mult * delta:
-		var target := _best_pass_target(p, team, opponents, target_goal_x)
-		if target != null:
-			sim._kick_from_player(p, Vector2(target.x, target.y), 0.35, false)
+	# Find the nearest opponent bearing down on the carrier.
+	var nearest_opp_dist := INF
+	var nearest_opp: PlayerState = null
+	for opp in opponents:
+		var d := Vector2(opp.x - p.x, opp.y - p.y).length()
+		if d < nearest_opp_dist:
+			nearest_opp_dist = d
+			nearest_opp = opp
+	var under_pressure := nearest_opp_dist < 0.15
+	# When pressured, try to pass immediately before being tackled.
+	if under_pressure and randf() < 4.0 * decision_scale * delta:
+		var pass_target := _best_pass_target(p, team, opponents, target_goal_x)
+		if pass_target != null:
+			sim._kick_from_player(p, Vector2(pass_target.x, pass_target.y), 0.35, false)
 			return
+	# Shoot when close enough and facing the goal.
+	var facing_goal := Vector2(target_goal_x - p.x, -p.y).normalized()
+	var facing_dot := Vector2(p.facing_x, p.facing_y).dot(facing_goal)
+	var shoot_range := 0.50 if facing_dot > 0.6 else 0.30
+	if dist_to_goal < shoot_range and randf() < 3.0 * decision_scale * delta:
+		var aim_y := clampf(randf_range(-0.06, 0.06), -GameConfig.GOAL_HALF_WIDTH * 0.8, GameConfig.GOAL_HALF_WIDTH * 0.8)
+		var power := 0.65 + randf() * 0.2
+		sim._kick_from_player(p, Vector2(target_goal_x, aim_y), power, false)
+		sim.ball.is_super_shot = dist_to_goal < 0.35
+		return
+	# Pass when a good option is available.
+	if randf() < 1.8 * decision_scale * delta:
+		var pass_target := _best_pass_target(p, team, opponents, target_goal_x)
+		if pass_target != null:
+			sim._kick_from_player(p, Vector2(pass_target.x, pass_target.y), 0.35, false)
+			return
+	# Dribble toward goal, steering slightly away from the nearest opponent.
 	var dribble := Vector2(target_goal_x - p.x, -p.y * 0.25)
+	if nearest_opp != null and nearest_opp_dist < 0.25:
+		var evade := Vector2(p.x - nearest_opp.x, p.y - nearest_opp.y).normalized()
+		dribble += evade * 0.5
 	if dribble.length() > 0.001:
 		dribble = dribble.normalized()
 		p.x += dribble.x * p.speed * 0.8 * delta

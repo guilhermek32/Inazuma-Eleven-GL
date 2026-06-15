@@ -93,7 +93,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (keyboard + mouse vs controller)\nP1 Move: W A S D    Aim: Mouse    Shoot: SPACE\nP2 Move: Left stick    Aim: Right stick\nP2 Shoot: R1 / RB  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
+	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\nPass: E   Switch player: Q\n\n2 PLAYERS (keyboard + mouse vs controller)\nP1 Move: W A S D    Aim: Mouse    Shoot: SPACE    Pass: E    Switch: Q\nP2 Move: Left stick    Aim: Right stick\nP2 Shoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: controller._set_game_state(controller.prev_menu_state))
 
@@ -178,17 +178,31 @@ func _refresh_two_player_availability() -> void:
 func show_for_state(state: int) -> void:
 	for key in menu_panels:
 		(menu_panels[key] as Control).visible = false
+	var active: Control = null
 	match state:
 		GameConfig.GameState.MENU:
-			menu_panels.main.visible = true
+			active = menu_panels.main
 		GameConfig.GameState.HOWTO:
-			menu_panels.howto.visible = true
+			active = menu_panels.howto
 		GameConfig.GameState.SETTINGS:
-			menu_panels.settings.visible = true
+			active = menu_panels.settings
 		GameConfig.GameState.PAUSED:
-			menu_panels.pause.visible = true
+			active = menu_panels.pause
 		GameConfig.GameState.FULLTIME:
-			menu_panels.fulltime.visible = true
+			active = menu_panels.fulltime
+	if active != null:
+		active.visible = true
+		_focus_first_button(active)
+
+func _focus_first_button(node: Control) -> bool:
+	if node is Button and node.focus_mode != Control.FOCUS_NONE and node.visible and not (node as Button).disabled:
+		(node as Button).grab_focus()
+		return true
+	for child in node.get_children():
+		if child is Control:
+			if _focus_first_button(child as Control):
+				return true
+	return false
 
 func set_fulltime_text(text: String) -> void:
 	if fulltime_label != null:

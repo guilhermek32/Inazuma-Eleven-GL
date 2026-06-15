@@ -38,7 +38,8 @@ func _build_environment() -> void:
 func _build_camera() -> void:
 	camera_rig = Node3D.new()
 	camera_rig.name = "CameraRig"
-	camera_rig.position = Vector3(0.0, 18.0, 24.0)
+	var s := GameConfig.FIELD_SCALE
+	camera_rig.position = Vector3(0.0, s, s * (4.0 / 3.0))
 	host.add_child(camera_rig)
 	camera_3d = Camera3D.new()
 	camera_3d.name = "Camera3D"
@@ -59,11 +60,13 @@ func _build_lighting() -> void:
 	var flood_root := Node3D.new()
 	flood_root.name = "FloodLights"
 	host.add_child(flood_root)
+	var fl := GameConfig.FIELD_SCALE * (24.0 / 18.0)
+	var flz := GameConfig.FIELD_SCALE * (19.0 / 18.0)
 	var positions := [
-		Vector3(-24.0, 14.0, -19.0),
-		Vector3(24.0, 14.0, -19.0),
-		Vector3(-24.0, 14.0, 19.0),
-		Vector3(24.0, 14.0, 19.0),
+		Vector3(-fl, 14.0, -flz),
+		Vector3(fl, 14.0, -flz),
+		Vector3(-fl, 14.0, flz),
+		Vector3(fl, 14.0, flz),
 	]
 	for i in positions.size():
 		_add_floodlight(flood_root, positions[i], i)
@@ -96,28 +99,34 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 func _build_stadium() -> void:
 	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
 	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
+	var s := GameConfig.FIELD_SCALE
+	var stand_gap_z := s * (5.0 / 18.0)
+	var stand_gap_x := s * (5.5 / 18.0)
+	var score_gap := s * (7.8 / 18.0)
 	_add_ground_apron()
 	_add_perimeter_walls()
-	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - 5.0), Vector3(field_x * 2.5, 2.0, 5.0), mf.materials.concrete)
-	_add_stand("SouthStand", Vector3(0.0, 1.0, field_z + 5.0), Vector3(field_x * 2.5, 2.0, 5.0), mf.materials.concrete)
-	_add_stand("WestStand", Vector3(-field_x - 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), mf.materials.concrete)
-	_add_stand("EastStand", Vector3(field_x + 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), mf.materials.concrete)
+	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - stand_gap_z), Vector3(field_x * 2.5, 2.0, s * (5.0 / 18.0)), mf.materials.concrete)
+	_add_stand("SouthStand", Vector3(0.0, 1.0, field_z + stand_gap_z), Vector3(field_x * 2.5, 2.0, s * (5.0 / 18.0)), mf.materials.concrete)
+	_add_stand("WestStand", Vector3(-field_x - stand_gap_x, 1.0, 0.0), Vector3(s * (5.0 / 18.0), 2.0, field_z * 2.0), mf.materials.concrete)
+	_add_stand("EastStand", Vector3(field_x + stand_gap_x, 1.0, 0.0), Vector3(s * (5.0 / 18.0), 2.0, field_z * 2.0), mf.materials.concrete)
 	_add_crowd_cards(field_x, field_z)
 	_add_hoardings()
-	_add_scoreboard(Vector3(0.0, 5.2, -field_z - 7.8))
+	_add_scoreboard(Vector3(0.0, 5.2, -field_z - score_gap))
 
 func _add_ground_apron() -> void:
 	var apron := mf._mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
-	apron.mesh.size = Vector3(72.0, 0.08, 68.0)
+	var s := GameConfig.FIELD_SCALE
+	apron.mesh.size = Vector3(s * (72.0 / 18.0), 0.08, s * (68.0 / 18.0))
 	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	stadium_root.add_child(apron)
 
 func _add_perimeter_walls() -> void:
+	var s := GameConfig.FIELD_SCALE
 	var walls := [
-		["NorthWall", Vector3(0.0, 4.0, -33.7), Vector3(72.0, 8.0, 0.6)],
-		["SouthWall", Vector3(0.0, 4.0, 33.7), Vector3(72.0, 8.0, 0.6)],
-		["WestWall", Vector3(-35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
-		["EastWall", Vector3(35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
+		["NorthWall", Vector3(0.0, 4.0, -s * (33.7 / 18.0)), Vector3(s * (72.0 / 18.0), 8.0, 0.6)],
+		["SouthWall", Vector3(0.0, 4.0, s * (33.7 / 18.0)), Vector3(s * (72.0 / 18.0), 8.0, 0.6)],
+		["WestWall", Vector3(-s * (35.7 / 18.0), 4.0, 0.0), Vector3(0.6, 8.0, s * (68.0 / 18.0))],
+		["EastWall", Vector3(s * (35.7 / 18.0), 4.0, 0.0), Vector3(0.6, 8.0, s * (68.0 / 18.0))],
 	]
 	for w in walls:
 		var wall := mf._mesh(w[0], BoxMesh.new(), mf.materials.wall, w[1])
@@ -131,25 +140,33 @@ func _add_perimeter_walls() -> void:
 	sign.text = "INAZUMA STADIUM"
 	sign.font_size = 260
 	sign.modulate = Color(0.98, 0.92, 0.72)
-	sign.position = Vector3(0.0, 6.5, -33.3)
+	var s2 := GameConfig.FIELD_SCALE
+	sign.position = Vector3(0.0, 6.5, -s2 * (33.3 / 18.0))
 	stadium_root.add_child(sign)
 
 func _add_hoardings() -> void:
 	var ads := ["INAZUMA", "RAIMON FC", "ELEVEN TV", "KICK & GO", "SUPERNOVA", "GOAL MART", "METEOR LTD", "STRIKER+"]
 	var bx := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE
 	var bz := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE
+	var s := GameConfig.FIELD_SCALE
+	var h_start := -s * (13.65 / 18.0)
+	var h_step := s * (3.9 / 18.0)
+	var h_offset := s * (1.7 / 18.0)
+	var v_start := -s * (7.8 / 18.0)
+	var v_step := s * (3.9 / 18.0)
+	var v_offset := s * (2.2 / 18.0)
 	var idx := 0
 	for i in 8:
-		var x := -13.65 + float(i) * 3.9
-		_add_hoarding(Vector3(x, 0.0, -bz - 1.7), 0.0, ads[idx % ads.size()], idx)
+		var x := h_start + float(i) * h_step
+		_add_hoarding(Vector3(x, 0.0, -bz - h_offset), 0.0, ads[idx % ads.size()], idx)
 		idx += 1
-		_add_hoarding(Vector3(x, 0.0, bz + 1.7), PI, ads[idx % ads.size()], idx)
+		_add_hoarding(Vector3(x, 0.0, bz + h_offset), PI, ads[idx % ads.size()], idx)
 		idx += 1
 	for i in 5:
-		var z := -7.8 + float(i) * 3.9
-		_add_hoarding(Vector3(-bx - 2.2, 0.0, z), PI * 0.5, ads[idx % ads.size()], idx)
+		var z := v_start + float(i) * v_step
+		_add_hoarding(Vector3(-bx - v_offset, 0.0, z), PI * 0.5, ads[idx % ads.size()], idx)
 		idx += 1
-		_add_hoarding(Vector3(bx + 2.2, 0.0, z), -PI * 0.5, ads[idx % ads.size()], idx)
+		_add_hoarding(Vector3(bx + v_offset, 0.0, z), -PI * 0.5, ads[idx % ads.size()], idx)
 		idx += 1
 
 func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
@@ -211,16 +228,19 @@ func _add_crowd_cards(field_x: float, field_z: float) -> void:
 			fan_textures.append(load(path))
 	if fan_textures.is_empty():
 		return
+	var s := GameConfig.FIELD_SCALE
+	var crowd_gap_z := s * (4.05 / 18.0)
+	var crowd_gap_x := s * (4.25 / 18.0)
 	for row in 3:
 		for i in 22:
 			var x := -field_x * 1.12 + float(i) * (field_x * 2.24 / 21.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, -field_z - 4.05 - row * 0.72), Vector3(0.0, PI, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, field_z + 4.05 + row * 0.72), Vector3.ZERO)
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, -field_z - crowd_gap_z - row * 0.72), Vector3(0.0, PI, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, field_z + crowd_gap_z + row * 0.72), Vector3.ZERO)
 	for row in 2:
 		for i in 14:
 			var z := -field_z * 0.9 + float(i) * (field_z * 1.8 / 13.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 4.25 - row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, PI * 0.5, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 4.25 + row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, -PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - crowd_gap_x - row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, PI * 0.5, 0.0))
+			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + crowd_gap_x + row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, -PI * 0.5, 0.0))
 
 func _add_fan_sprite(texture: Texture2D, feet_pos: Vector3, rot: Vector3) -> void:
 	var sprite := Sprite3D.new()

@@ -135,7 +135,8 @@ func _update_ball_trail(speed: float) -> void:
 func _update_camera(delta: float) -> void:
 	if camera_rig == null or camera_3d == null:
 		return
-	var target_pos := Vector3(clampf(sim.ball.x * GameConfig.FIELD_SCALE * 0.25, -5.0, 5.0), 18.0, 24.0 + clampf(-sim.ball.y * GameConfig.FIELD_SCALE * 0.12, -2.5, 2.5))
+	var _fs := GameConfig.FIELD_SCALE
+	var target_pos := Vector3(clampf(sim.ball.x * _fs * 0.25, -_fs * (5.0 / 18.0), _fs * (5.0 / 18.0)), _fs, _fs * (4.0 / 3.0) + clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0)))
 	camera_rig.position = camera_rig.position.lerp(target_pos, 1.0 - exp(-1.8 * delta))
 	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)

@@ -15,11 +15,17 @@ var vol_music := 0.7
 var vol_sfx := 1.0
 var audio: AudioManager
 
+func apply() -> void:
+	_apply_settings()
+
+func save() -> void:
+	_save_settings()
+
 func _apply_settings() -> void:
 	match difficulty:
-		0: ai_speed_mult = 0.85; ai_decision_mult = 0.6
+		0: ai_speed_mult = 0.80; ai_decision_mult = 0.5
 		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0
-		2: ai_speed_mult = 1.15; ai_decision_mult = 1.5
+		2: ai_speed_mult = 1.25; ai_decision_mult = 2.0
 	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
 	DisplayServer.window_set_mode(mode)
 	apply_volumes()
@@ -51,7 +57,17 @@ func _setup_input_actions() -> void:
 	_add_key_action("move_left", KEY_A)
 	_add_key_action("move_right", KEY_D)
 	_add_key_action("shoot", KEY_SPACE)
+	_add_key_action("pass", KEY_E)
+	_add_key_action("switch_player", KEY_Q)
+	_add_joy_button_action("pass", JOY_BUTTON_A)
+	_add_joy_button_action("switch_player", JOY_BUTTON_LEFT_SHOULDER)
 	_add_joy_button_action("ui_cancel", JOY_BUTTON_START)
+	# D-pad and confirm for menu navigation (joystick 0).
+	_add_joy_button_action("ui_accept", JOY_BUTTON_A)
+	_add_joy_button_action("ui_up", JOY_BUTTON_DPAD_UP)
+	_add_joy_button_action("ui_down", JOY_BUTTON_DPAD_DOWN)
+	_add_joy_button_action("ui_left", JOY_BUTTON_DPAD_LEFT)
+	_add_joy_button_action("ui_right", JOY_BUTTON_DPAD_RIGHT)
 
 func _add_key_action(action: StringName, keycode: Key) -> void:
 	if not InputMap.has_action(action):
