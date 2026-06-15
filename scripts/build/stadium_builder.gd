@@ -25,13 +25,28 @@ func _build_environment() -> void:
 	sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	# IBL: drive ambient and reflections from the procedural night sky so metallic
+	# surfaces (posts, poles) catch the sky colour instead of a flat grey fill.
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_color = Color(0.45, 0.55, 0.78)
-	env.ambient_light_energy = 0.4
+	env.ambient_light_energy = 0.18
+	# HDR tonemapping for a night stadium with bright floodlights.
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.1
+	env.tonemap_white = 8.0
+	# Glow/bloom: high HDR threshold keeps only the lamp housings and emissive
+	# ad-boards blooming; floodlight cones and the scoreboard halo follow.
 	env.glow_enabled = true
-	env.glow_intensity = 0.5
-	env.glow_bloom = 0.3
+	env.glow_intensity = 0.9
+	env.glow_strength = 1.2
+	env.glow_bloom = 0.45
+	env.glow_hdr_threshold = 0.9
+	# SSAO: screen-space ambient occlusion darkens contact areas (players on grass,
+	# inside goal mouth, stand tiers) without expensive ray-traced GI.
+	env.ssao_enabled = true
+	env.ssao_radius = 0.8
+	env.ssao_intensity = 2.0
+	env.ssao_power = 1.6
 	world.environment = env
 	host.add_child(world)
 
@@ -52,9 +67,13 @@ func _build_lighting() -> void:
 	var moon := DirectionalLight3D.new()
 	moon.name = "MoonLight"
 	moon.light_color = Color(0.60, 0.68, 0.88)
-	moon.light_energy = 0.3
-	moon.shadow_enabled = false
+	moon.light_energy = 0.45
+	moon.light_specular = 0.5
 	moon.light_angular_distance = 0.8
+	# Shadow with 4-split CSM grounds all players and structures on the pitch.
+	moon.shadow_enabled = true
+	moon.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	moon.shadow_bias = 0.02
 	moon.rotation_degrees = Vector3(-52.0, -34.0, 0.0)
 	host.add_child(moon)
 	var flood_root := Node3D.new()
@@ -85,14 +104,28 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	var lamp := mf._mesh("Lamp", BoxMesh.new(), mf.materials.light_emission, Vector3.ZERO)
 	lamp.mesh.size = Vector3(1.5, 0.42, 0.35)
 	tower.add_child(lamp)
+	# Warm omni accent inside lamp housing: demonstrates point-source distance
+	# attenuation (inverse-square) and local emissive halo around the fitting.
+	var accent := OmniLight3D.new()
+	accent.name = "LampAccent"
+	accent.light_color = Color(1.0, 0.88, 0.65)
+	accent.light_energy = 2.5
+	accent.omni_range = 4.0
+	accent.omni_attenuation = 2.0
+	accent.shadow_enabled = false
+	tower.add_child(accent)
+	# Spot (cone source): crisp falloff, specular highlights on players/posts.
+	# Only the first two towers cast soft shadows to stay in the lean budget.
 	var spot := SpotLight3D.new()
 	spot.name = "SpotLight3D"
 	spot.light_color = Color(0.78, 0.88, 1.0)
-	spot.light_energy = 7.0
-	spot.spot_range = 60.0
+	spot.light_energy = 7.5
+	spot.light_specular = 0.8
+	spot.spot_range = 70.0
 	spot.spot_angle = 48.0
+	spot.spot_attenuation = 1.5
 	spot.light_size = 1.2
-	spot.shadow_enabled = index < 4
+	spot.shadow_enabled = index < 2
 	tower.add_child(spot)
 	spot.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 
@@ -215,6 +248,17 @@ func _add_scoreboard(pos: Vector3) -> void:
 		pole.mesh.top_radius = 0.09
 		pole.mesh.bottom_radius = 0.11
 		stadium_root.add_child(pole)
+	# Omni point source: green LCD spill onto the stand — demonstrates coloured
+	# point light with distance attenuation, paired with the emissive surface.
+	var spill := OmniLight3D.new()
+	spill.name = "ScoreboardSpill"
+	spill.light_color = Color(0.15, 1.0, 0.35)
+	spill.light_energy = 1.2
+	spill.omni_range = 9.0
+	spill.omni_attenuation = 2.0
+	spill.shadow_enabled = false
+	spill.position = pos + Vector3(0.0, 0.5, 0.8)
+	stadium_root.add_child(spill)
 
 func _add_crowd_cards(field_x: float, field_z: float) -> void:
 	var fan_textures: Array[Texture2D] = []

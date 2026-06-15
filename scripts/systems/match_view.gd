@@ -32,6 +32,8 @@ func _create_ball() -> void:
 	var mesh := material_factory._mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)
 	mesh.mesh.radius = 0.24
 	mesh.mesh.height = 0.48
+	mesh.mesh.radial_segments = 32
+	mesh.mesh.rings = 16
 	root.add_child(mesh)
 	var glow := OmniLight3D.new()
 	glow.name = "SpecialShotLight"
@@ -70,7 +72,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 		_update_glb_player_visual(p, owns_ball, delta)
 		return
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
-	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
+	var face := _facing_vector(p)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
 	var swing := sin(Time.get_ticks_msec() * 0.012) * (0.55 if p.is_moving else 0.08)
@@ -93,7 +95,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 
 func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
-	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
+	var face := _facing_vector(p)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
 	if p.action_timer > 0.0:
@@ -111,6 +113,13 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
+
+func _facing_vector(p: PlayerState) -> Vector3:
+	if not p.is_moving:
+		var to_ball := Vector2(sim.ball.x - p.x, sim.ball.y - p.y)
+		if to_ball.length_squared() > 0.0001:
+			return Vector3(to_ball.x, 0.0, -to_ball.y).normalized()
+	return Vector3(p.facing_x, 0.0, -p.facing_y)
 
 func _update_ball_visual(delta: float) -> void:
 	if sim.ball.node == null:
