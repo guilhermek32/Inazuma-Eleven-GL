@@ -2,6 +2,7 @@
 #define AUDIO_HPP
 
 #include <string>
+#include <vector>
 
 class AudioPlayer {
 public:
@@ -14,9 +15,12 @@ public:
     void shutdown();
 
 private:
+    void cleanupFinishedSounds();
+
     bool initialized;
     struct ma_engine* engine;
     struct ma_sound* track;
+    std::vector<struct ma_sound*> activeSounds;
 };
 
 #endif

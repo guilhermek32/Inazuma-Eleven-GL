@@ -209,8 +209,10 @@ func _load_assets() -> void:
 	blue_run_left = _textures(["res://assets/players_blue/running/run_blue1_left.png", "res://assets/players_blue/running/run_blue2_left.png", "res://assets/players_blue/running/run_blue3_left.png", "res://assets/players_blue/running/run_blue_left4.png"])
 	red_run_right = _textures(["res://assets/players_red/running/run_red_1.png", "res://assets/players_red/running/run_red2.png", "res://assets/players_red/running/run_red3.png", "res://assets/players_red/running/run_red4.png"])
 	red_run_left = _textures(["res://assets/players_red/running/run_red_left2.png", "res://assets/players_red/running/run_red_left3.png", "res://assets/players_red/running/run_red_left4.png"])
-	ball_frames = _textures(["res://assets/ball/ball1.png", "res://assets/ball/ball2.png", "res://assets/ball/ball3.png", "res://assets/ball/ball4.png", "res://assets/ball/ball5.png"])
+	ball_frames = _textures(["res://assets/ball/ball1.png", "res://assets/ball/ball2.png", "res://assets/ball/ball3.png", "res://assets/ball/ball4.png"])
 	ball_super = _tex("res://assets/ball/ball_super1.png")
+	if ball_super == null and not ball_frames.is_empty():
+		ball_super = ball_frames[0]
 	fans_blue = _textures(["res://assets/fans/fans_blue_1.png", "res://assets/fans/fans_blue_2.png"])
 	fans_red = _textures(["res://assets/fans/fans_red_1.png", "res://assets/fans/fans_red_2.png"])
 	if DisplayServer.get_name() != "headless":
@@ -308,7 +310,7 @@ func _create_teams() -> void:
 			p.run_frames_right = blue_run_right if not blue_run_right.is_empty() else [blue_face]
 			p.run_frames_left = blue_run_left if not blue_run_left.is_empty() else [blue_face]
 
-func _reset_game(scoring_team_side: int) -> void:
+func _reset_game(kickoff_side: int) -> void:
 	ball.x = 0.0
 	ball.y = 0.0
 	ball.vx = 0.0
@@ -319,10 +321,7 @@ func _reset_game(scoring_team_side: int) -> void:
 	ball.trail.clear()
 	_reset_players(team_red)
 	_reset_players(team_blue)
-	if scoring_team_side == -1:
-		_set_owner(0, 5)
-	else:
-		_set_owner(1, 5)
+	_set_owner(_team_index_for_side(kickoff_side), 5)
 	var owner := _owner_player()
 	if owner != null:
 		owner.x = 0.0
@@ -339,13 +338,21 @@ func _reset_players(team: Array[PlayerState]) -> void:
 		p.facing_x = float(p.side)
 		p.facing_y = 0.0
 
+func _team_index_for_side(side: int) -> int:
+	if not team_red.is_empty() and team_red[0].side == side:
+		return 0
+	return 1
+
 func _set_owner(team_idx: int, player_idx: int) -> void:
 	ball.owner_team = team_idx
 	ball.owner_index = player_idx
+	ball.is_super_shot = false
+	ball.charging_power = 0.0
 
 func _clear_owner() -> void:
 	ball.owner_team = -1
 	ball.owner_index = -1
+	ball.charging_power = 0.0
 
 func _owner_player() -> PlayerState:
 	if ball.owner_team == 0 and ball.owner_index >= 0 and ball.owner_index < team_red.size():
@@ -410,14 +417,20 @@ func _update_ball(delta: float) -> int:
 		if absf(ball.y) > GOAL_HALF_WIDTH:
 			ball.vx *= -1.0
 		elif ball.x > 0.0:
-			score_left += 1
-			_reset_game(1)
-			return -1
+			return _score_goal_against(1)
 		else:
-			score_right += 1
-			_reset_game(-1)
-			return 1
+			return _score_goal_against(-1)
 	return 0
+
+func _score_goal_against(goal_side: int) -> int:
+	var scoring_side := -goal_side
+	if _team_index_for_side(scoring_side) == 0:
+		score_left += 1
+		_reset_game(goal_side)
+		return -1
+	score_right += 1
+	_reset_game(goal_side)
+	return 1
 
 func _update_ball_visuals(delta: float) -> void:
 	if ball.trail.size() >= 8:
@@ -472,7 +485,8 @@ func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_
 			_update_ai_player(p, team, opponents, delta)
 			if ball.owner_team == team_idx and ball.owner_index == i:
 				_update_ai_owner(p, team, opponents, team_idx, delta)
-		_try_capture_ball(team, team_idx, i, opponents)
+		if kickoff_timer <= 0.0:
+			_try_capture_ball(team, team_idx, i, opponents)
 
 func _update_user_player(p: PlayerState, team_idx: int, player_idx: int, delta: float) -> void:
 	var speed_mult := 0.3 if p.stun_timer > 0.0 else 1.0
@@ -502,20 +516,23 @@ func _update_user_player(p: PlayerState, team_idx: int, player_idx: int, delta: 
 
 func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: bool) -> void:
 	var dir := Vector2(target.x - p.x, target.y - p.y)
-	if dir.length() > 0.001:
-		dir = dir.normalized()
-		p.facing_x = dir.x
-		p.facing_y = dir.y
-		var final_power := (0.012 + power * 0.023) * 30.0
-		ball.vx = dir.x * final_power
-		ball.vy = dir.y * final_power
-		var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
-		var dist_to_goal := Vector2(p.x - target_goal_x, p.y).length()
-		ball.is_super_shot = user_shot and power > 0.5 and dist_to_goal < 0.6
-		var spin_strength := power * 2.0
-		ball.spin_z = spin_strength * 0.5
-		ball.spin_x = randf_range(-0.5, 0.5) * spin_strength * 0.3
-		ball.spin_y = randf_range(-0.5, 0.5) * spin_strength * 0.3
+	if dir.length() <= 0.001:
+		dir = Vector2(p.facing_x, p.facing_y)
+	if dir.length() <= 0.001:
+		dir = Vector2(float(p.side), 0.0)
+	dir = dir.normalized()
+	p.facing_x = dir.x
+	p.facing_y = dir.y
+	var final_power := (0.012 + power * 0.023) * 30.0
+	ball.vx = dir.x * final_power
+	ball.vy = dir.y * final_power
+	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
+	var dist_to_goal := Vector2(p.x - target_goal_x, p.y).length()
+	ball.is_super_shot = user_shot and power > 0.5 and dist_to_goal < 0.6
+	var spin_strength := power * 2.0
+	ball.spin_z = spin_strength * 0.5
+	ball.spin_x = randf_range(-0.5, 0.5) * spin_strength * 0.3
+	ball.spin_y = randf_range(-0.5, 0.5) * spin_strength * 0.3
 	_clear_owner()
 	ball.x += ball.vx * 0.033
 	ball.y += ball.vy * 0.033

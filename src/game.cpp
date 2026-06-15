@@ -25,7 +25,13 @@ int runGame()
     GLFWwindow* window = glfwCreateWindow(1600, 900, "Inazuma Eleven GL", NULL, NULL);
     if (!window) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
+    }
+    glViewport(0, 0, 1600, 900);
+    glfwSwapInterval(1);
 
     using namespace Constants;
     Field field; Stadium stadium;
@@ -239,7 +245,7 @@ bool kickoffStarted = false;
 
         glClear(GL_COLOR_BUFFER_BIT);
         processInput(window, inputState, gameState.kickoffTimer <= 0.0f);
-        int scorerSide = updateBall(ball, score, team1, team2, gameState);
+        int scorerSide = updateBall(ball, score, team1, team2, gameState, deltaTime);
         if (scorerSide != 0) {
             stadium.triggerCrowdCelebration(scorerSide);
             // Clear old particles and emit celebration
@@ -267,6 +273,37 @@ bool kickoffStarted = false;
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+    auto deleteTexture = [](unsigned int& texture) {
+        if (texture != 0) {
+            glDeleteTextures(1, &texture);
+            texture = 0;
+        }
+    };
+    auto deleteTextureVector = [](std::vector<unsigned int>& textures) {
+        for (unsigned int& texture : textures) {
+            if (texture != 0) {
+                glDeleteTextures(1, &texture);
+                texture = 0;
+            }
+        }
+        textures.clear();
+    };
+    deleteTexture(blueFace);
+    deleteTexture(blueBack);
+    deleteTexture(blueLeft);
+    deleteTexture(blueRight);
+    deleteTexture(redFace);
+    deleteTexture(redBack);
+    deleteTexture(redLeft);
+    deleteTexture(redRight);
+    deleteTexture(texGKBlue);
+    deleteTexture(texGKRed);
+    deleteTextureVector(blueRunFramesRight);
+    deleteTextureVector(blueRunFramesLeft);
+    deleteTextureVector(redRunFramesRight);
+    deleteTextureVector(redRunFramesLeft);
+    deleteTextureVector(ball.normalTextures);
+    deleteTexture(ball.superTexture);
     stadium.shutdown();
     audioPlayer.shutdown();
     glfwDestroyWindow(window);

@@ -80,10 +80,6 @@ Scripts:
 
 ```text
 scripts/match_controller_3d.gd
-scripts/player_3d.gd
-scripts/ball_3d.gd
-scripts/stadium_3d.gd
-scripts/camera_broadcast.gd
 ```
 
 Materials:

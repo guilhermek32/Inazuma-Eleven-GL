@@ -14,6 +14,13 @@ void resetGame(Ball& ball, std::vector<Player>& team1, std::vector<Player>& team
     ball.dx = 0.0f;
     ball.dy = 0.0f;
     ball.owner = nullptr;
+    ball.isSuperShot = false;
+    ball.chargingPower = 0.0f;
+    ball.spinX = 0.0f;
+    ball.spinY = 0.0f;
+    ball.spinZ = 0.0f;
+    ball.trailX.clear();
+    ball.trailY.clear();
 
     for (auto& p : team1) {
         p.x = p.startX;
@@ -51,7 +58,7 @@ void resetGame(Ball& ball, std::vector<Player>& team1, std::vector<Player>& team
 }
 
 // Advances ball physics, handles wall collisions, and detects goals.
-int updateBall(Ball& ball, Score& score, std::vector<Player>& team1, std::vector<Player>& team2, GameState& gameState) {
+int updateBall(Ball& ball, Score& score, std::vector<Player>& team1, std::vector<Player>& team2, GameState& gameState, float deltaTime) {
     using namespace Constants;
 
     if (ball.owner) {
@@ -62,10 +69,12 @@ int updateBall(Ball& ball, Score& score, std::vector<Player>& team1, std::vector
         return 0;
     }
 
-    ball.x += ball.dx;
-    ball.y += ball.dy;
-    ball.dx *= ball.friction;
-    ball.dy *= ball.friction;
+    float frameScale = deltaTime * 60.0f;
+    ball.x += ball.dx * frameScale;
+    ball.y += ball.dy * frameScale;
+    float frictionScale = std::pow(ball.friction, frameScale);
+    ball.dx *= frictionScale;
+    ball.dy *= frictionScale;
 
     // Keep ball within field boundaries
     float ballRadius = 0.01f;
@@ -171,6 +180,7 @@ void updateTeam(
     }
 
     for (int i = 0; i < static_cast<int>(team.size()); ++i) {
+        team[i].isMoving = false;
         if (gameState.kickoffTimer <= 0.0f && i == userPlayerIdx) {
             float speedMult = (team[i].stunTimer > 0.0f) ? 0.3f : 1.0f;
             if (team[i].kickPower > 0.0f) {
@@ -219,41 +229,49 @@ void updateTeam(
                     float dirX = inputState.mouseX - team[i].x;
                     float dirY = inputState.mouseY - team[i].y;
                     float mag = std::sqrt(dirX * dirX + dirY * dirY);
-                    if (mag > 0.001f) {
-                        float finalPower = (0.012f + (team[i].kickPower * 0.023f)) * 0.5f;
-                        ball.dx = (dirX / mag) * finalPower;
-                        ball.dy = (dirY / mag) * finalPower;
-
-                        float targetGoalX = (team[i].side == -1) ? Constants::FIELD_BOUNDARY_X : -Constants::FIELD_BOUNDARY_X;
-                        float distToGoal = std::sqrt(std::pow(team[i].x - targetGoalX, 2) + std::pow(team[i].y, 2));
-                        if (team[i].kickPower > 0.5f && distToGoal < 0.6f) {
-                            ball.isSuperShot = true;
-                        } else {
-                            ball.isSuperShot = false;
-                        }
-                        
-                        // Apply spin effect based on kick power (Magnus effect)
-                        // Higher kick power = more spin = more curve
-                        float spinStrength = team[i].kickPower * 2.0f;
-                        ball.spinZ = spinStrength * 0.5f;  // Primary spin axis
-                        ball.spinX = (std::rand() % 100 - 50) / 100.0f * spinStrength * 0.3f;
-                        ball.spinY = (std::rand() % 100 - 50) / 100.0f * spinStrength * 0.3f;
+                    if (mag <= 0.001f) {
+                        dirX = team[i].facingX;
+                        dirY = team[i].facingY;
+                        mag = std::sqrt(dirX * dirX + dirY * dirY);
                     }
-ball.owner = nullptr;
-                     ball.x += ball.dx * 2.0f;
-                     ball.y += ball.dy * 2.0f;
-                     ball.chargingPower = 0.0f;  // Reset Hissatsu charge after kick
-                     team[i].kickPower = 0.0f;
-                     team[i].stunTimer = 0.3f;
-                     // Pass true if it's a special shot (super shot), false otherwise
-                     onKick(ball.isSuperShot);
-                 }
-             } else {
-                 team[i].kickPower = 0.0f;
-                 if (ball.owner != &team[i]) {
-                     ball.chargingPower = 0.0f;  // Reset if not the ball owner
-                 }
-             }
+                    if (mag <= 0.001f) {
+                        dirX = static_cast<float>(team[i].side);
+                        dirY = 0.0f;
+                        mag = 1.0f;
+                    }
+                    float finalPower = (0.012f + (team[i].kickPower * 0.023f)) * 0.5f;
+                    ball.dx = (dirX / mag) * finalPower;
+                    ball.dy = (dirY / mag) * finalPower;
+
+                    float targetGoalX = (team[i].side == -1) ? Constants::FIELD_BOUNDARY_X : -Constants::FIELD_BOUNDARY_X;
+                    float distToGoal = std::sqrt(std::pow(team[i].x - targetGoalX, 2) + std::pow(team[i].y, 2));
+                    if (team[i].kickPower > 0.5f && distToGoal < 0.6f) {
+                        ball.isSuperShot = true;
+                    } else {
+                        ball.isSuperShot = false;
+                    }
+
+                    // Apply spin effect based on kick power (Magnus effect)
+                    // Higher kick power = more spin = more curve
+                    float spinStrength = team[i].kickPower * 2.0f;
+                    ball.spinZ = spinStrength * 0.5f;  // Primary spin axis
+                    ball.spinX = (std::rand() % 100 - 50) / 100.0f * spinStrength * 0.3f;
+                    ball.spinY = (std::rand() % 100 - 50) / 100.0f * spinStrength * 0.3f;
+                    ball.owner = nullptr;
+                    ball.x += ball.dx * 2.0f;
+                    ball.y += ball.dy * 2.0f;
+                    ball.chargingPower = 0.0f;  // Reset Hissatsu charge after kick
+                    team[i].kickPower = 0.0f;
+                    team[i].stunTimer = 0.3f;
+                    // Pass true if it's a special shot (super shot), false otherwise
+                    onKick(ball.isSuperShot);
+                }
+            } else {
+                team[i].kickPower = 0.0f;
+                if (ball.owner != &team[i]) {
+                    ball.chargingPower = 0.0f;  // Reset if not the ball owner
+                }
+            }
         } else if (gameState.kickoffTimer <= 0.0f) {
             team[i].is_targeting_ball = std::find(chasers.begin(), chasers.end(), i) != chasers.end();
             team[i].update(ball.x, ball.y, teamPossessing, ball.owner, team, opponents, deltaTime);
@@ -307,20 +325,25 @@ ball.owner = nullptr;
                 float distToGoal = std::sqrt(std::pow(targetGoalX - team[i].x, 2) + std::pow(0.0f - team[i].y, 2));
                 bool canShoot = distToGoal < 0.4f;
 
-                if (bestPassTarget && (std::rand() % 100) < 3) {
+                float randomUnit = static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX);
+                if (bestPassTarget && randomUnit < 1.8f * deltaTime) {
                     float passDirX = bestPassTarget->x - team[i].x;
                     float passDirY = bestPassTarget->y - team[i].y;
                     float passMag = std::sqrt(passDirX * passDirX + passDirY * passDirY);
-                    float passPower = 0.012f;
-                    ball.dx = (passDirX / passMag) * passPower;
-                    ball.dy = (passDirY / passMag) * passPower;
-                    ball.owner = nullptr;
-                    team[i].stunTimer = 0.8f;
-                    onKick(false);  // Normal pass
-                } else if (canShoot && (std::rand() % 100) < 5) {
+                    if (passMag > 0.001f) {
+                        float passPower = 0.012f;
+                        ball.dx = (passDirX / passMag) * passPower;
+                        ball.dy = (passDirY / passMag) * passPower;
+                        ball.isSuperShot = false;
+                        ball.owner = nullptr;
+                        team[i].stunTimer = 0.8f;
+                        onKick(false);  // Normal pass
+                    }
+                } else if (canShoot && randomUnit < 3.0f * deltaTime && distToGoal > 0.001f) {
                     float finalPower = 0.015f + (std::rand() % 10) / 1000.0f;
                     ball.dx = (targetGoalX - team[i].x) / distToGoal * finalPower;
                     ball.dy = (0.0f - team[i].y) / distToGoal * finalPower;
+                    ball.isSuperShot = true;
                     ball.owner = nullptr;
                     ball.x += ball.dx * 2.0f;
                     ball.y += ball.dy * 2.0f;
@@ -353,11 +376,15 @@ ball.owner = nullptr;
         if (distToBall < 0.04f) {
             if (!ball.owner && team[i].stunTimer <= 0.0f) {
                 ball.owner = &team[i];
+                ball.isSuperShot = false;
+                ball.chargingPower = 0.0f;
             } else if (ball.owner && ball.owner->side != team[i].side && team[i].stunTimer <= 0.0f) {
                 if (ball.owner->role != PlayerRole::GOALKEEPER) {
                     ball.owner->stunTimer = 0.5f;
                     ball.owner->kickPower = 0.0f;
                     ball.owner = &team[i];
+                    ball.isSuperShot = false;
+                    ball.chargingPower = 0.0f;
                 }
             }
         }

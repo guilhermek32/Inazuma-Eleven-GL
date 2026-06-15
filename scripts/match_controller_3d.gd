@@ -17,11 +17,22 @@ const CENTER_CIRCLE_RADIUS := 0.16
 const CORNER_ARC_RADIUS := 0.035
 const FIELD_SCALE := 18.0
 const PITCH_Y := 0.0
-const BLUE_MODEL_SCALE := 0.9
-const BLUE_MODEL_TARGET_HEIGHT := 0.004
-const BLUE_MODEL_Y_OFFSET := 0.0
-const BLUE_MODEL_YAW_OFFSET := 180.0
-const BLUE_ASSET_DIR := "res://assets/obj_3d_player/"
+const PLAYER_GLB_SCALE := 1.14
+const PLAYER_GLB_Y_OFFSET := 0.0
+const PLAYER_GLB_YAW_OFFSET := 0.0
+const PLAYER_ASSET_DIR := "res://assets/obj_3d_player/"
+const PLAYER_MESH_FILE := "Ch38_nonPBR.glb"
+const PLAYER_GLTF_ANIM := "Armature|mixamo.com|Layer0"
+# Friendly state name -> [animation-only GLB, should loop]. All share the Ch38 mixamorig5 rig,
+# so their clips retarget onto the character mesh skeleton directly.
+const PLAYER_ANIM_FILES := {
+	"idle": ["offensive idle.glb", true],
+	"run": ["jog forward.glb", true],
+	"gk_idle": ["goalkeeper idle.glb", true],
+	"kick": ["kick soccerball.glb", false],
+	"receive": ["receive soccerball.glb", false],
+	"tackle": ["soccer tackle.glb", false],
+}
 
 class PlayerState:
 	var x := 0.0
@@ -33,6 +44,7 @@ class PlayerState:
 	var facing_y := 0.0
 	var side := 1
 	var role := PlayerRole.MIDFIELDER
+	var team_index := 0
 	var stun_timer := 0.0
 	var kick_power := 0.0
 	var hold_timer := 0.0
@@ -43,7 +55,6 @@ class PlayerState:
 	var visual_model: Node3D
 	var animation_player: AnimationPlayer
 	var visual_state := ""
-	var visual_path := ""
 	var action_timer := 0.0
 
 	func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> void:
@@ -54,6 +65,7 @@ class PlayerState:
 		speed = p_speed
 		side = p_side
 		role = p_role
+		team_index = 0 if p_side == -1 else 1
 		facing_x = float(p_side)
 
 class BallState:
@@ -95,6 +107,8 @@ enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME }
 
 var materials := {}
 var glb_scene_cache := {}
+var player_anim_library: AnimationLibrary
+var player_anim_ready := false
 var camera_rig: Node3D
 var camera_3d: Camera3D
 var pitch_root: Node3D
@@ -213,6 +227,7 @@ func _set_game_state(next: int) -> void:
 	if next == GameState.HOWTO or next == GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameState.MENU, GameState.PAUSED] else GameState.MENU
 	game_state = next
+	_set_glb_animations_paused(next != GameState.PLAYING)
 	for key in menu_panels:
 		(menu_panels[key] as Control).visible = false
 	match next:
@@ -234,6 +249,7 @@ func _start_match() -> void:
 	match_time = 0.0
 	current_half = 1
 	halftime_pause = 0.0
+	_set_default_ends()
 	_reset_game(1)
 	_set_game_state(GameState.PLAYING)
 	_play_whistle()
@@ -245,6 +261,7 @@ func _update_match_clock(delta: float) -> void:
 			current_half = 2
 			match_time = 0.0
 			halftime_pause = 2.0
+			_switch_ends()
 			_reset_game(1)
 			_play_whistle()
 		else:
@@ -260,6 +277,38 @@ func _end_match() -> void:
 	if fulltime_label != null:
 		fulltime_label.text = "FULL TIME\n%d - %d\n%s" % [score_left, score_right, result]
 	_set_game_state(GameState.FULLTIME)
+
+func _switch_ends() -> void:
+	for p in team_red:
+		_flip_player_end(p)
+	for p in team_blue:
+		_flip_player_end(p)
+
+func _flip_player_end(p: PlayerState) -> void:
+	p.side *= -1
+	p.start_x *= -1.0
+	p.x *= -1.0
+	p.facing_x = float(p.side)
+	p.facing_y = 0.0
+
+func _set_default_ends() -> void:
+	for p in team_red:
+		p.side = -1
+		p.start_x = -absf(p.start_x)
+		p.facing_x = -1.0
+	for p in team_blue:
+		p.side = 1
+		p.start_x = absf(p.start_x)
+		p.facing_x = 1.0
+
+func _set_glb_animations_paused(paused: bool) -> void:
+	var speed := 0.0 if paused else 1.0
+	for p in team_red:
+		if p.animation_player != null:
+			p.animation_player.speed_scale = speed
+	for p in team_blue:
+		if p.animation_player != null:
+			p.animation_player.speed_scale = speed
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 	if game_state == GameState.MENU:
@@ -968,6 +1017,7 @@ func _setup_input_actions() -> void:
 	_add_key_action("move_left", KEY_A)
 	_add_key_action("move_right", KEY_D)
 	_add_key_action("shoot", KEY_SPACE)
+	_add_joy_button_action("ui_cancel", JOY_BUTTON_START)
 
 func _add_key_action(action: StringName, keycode: Key) -> void:
 	if not InputMap.has_action(action):
@@ -976,6 +1026,16 @@ func _add_key_action(action: StringName, keycode: Key) -> void:
 	event.physical_keycode = keycode
 	for existing in InputMap.action_get_events(action):
 		if existing is InputEventKey and existing.physical_keycode == keycode:
+			return
+	InputMap.action_add_event(action, event)
+
+func _add_joy_button_action(action: StringName, button_index: JoyButton) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	var event := InputEventJoypadButton.new()
+	event.button_index = button_index
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventJoypadButton and existing.button_index == button_index:
 			return
 	InputMap.action_add_event(action, event)
 
@@ -1014,10 +1074,9 @@ func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, s
 	team.append(state)
 
 func _create_player_visual(state: PlayerState) -> Node3D:
-	if state.side == 1:
-		var blue_visual = _create_blue_player_visual(state)
-		if blue_visual != null:
-			return blue_visual
+	var glb_visual = _create_glb_player_visual(state)
+	if glb_visual != null:
+		return glb_visual
 	var root := Node3D.new()
 	root.name = "RedPlayer" if state.side == -1 else "BluePlayer"
 	var uniform: Material = materials.goalkeeper if state.role == PlayerRole.GOALKEEPER else (materials.player_red if state.side == -1 else materials.player_blue)
@@ -1055,9 +1114,9 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	root.add_child(power)
 	return root
 
-func _create_blue_player_visual(state: PlayerState):
+func _create_glb_player_visual(state: PlayerState):
 	var root := Node3D.new()
-	root.name = "BlueGLBPlayer"
+	root.name = "RedGLBPlayer" if state.team_index == 0 else "BlueGLBPlayer"
 	state.uses_glb = true
 	state.node = root
 	var marker := _mesh("SelectedRing", CylinderMesh.new(), materials.selection, Vector3(0.0, 0.035, 0.0))
@@ -1072,50 +1131,97 @@ func _create_blue_player_visual(state: PlayerState):
 	power.mesh.height = 0.025
 	power.visible = false
 	root.add_child(power)
-	var idle_state := "gk_idle" if state.role == PlayerRole.GOALKEEPER else "idle"
-	_set_blue_visual_state(state, idle_state)
-	if state.visual_model == null:
+	# Load the character mesh once and drive its skeleton with retargeted Mixamo clips.
+	var model: Node3D = _instantiate_glb(PLAYER_ASSET_DIR + PLAYER_MESH_FILE)
+	if model == null:
+		push_warning("Player GLB mesh failed to load: %s" % (PLAYER_ASSET_DIR + PLAYER_MESH_FILE))
 		state.uses_glb = false
 		root.free()
 		return null
+	_place_glb_model(model)
+	_apply_team_tint(model, state.team_index)
+	model.name = "Model"
+	model.rotation_degrees = Vector3(0.0, PLAYER_GLB_YAW_OFFSET, 0.0)
+	root.add_child(model)
+	if _ensure_player_anim_library():
+		var anim := AnimationPlayer.new()
+		anim.name = "AnimationPlayer"
+		model.add_child(anim)
+		# Tracks read "Armature/Skeleton3D:bone", so resolve them from the model root.
+		anim.root_node = anim.get_path_to(model)
+		anim.add_animation_library("", player_anim_library)
+		state.animation_player = anim
+	else:
+		push_warning("Player GLB animations unavailable; using static mesh.")
+	state.visual_model = model
+	_set_glb_visual_state(state, "gk_idle" if state.role == PlayerRole.GOALKEEPER else "idle")
 	return root
 
-func _set_blue_visual_state(p: PlayerState, state_name: String) -> void:
-	if not p.uses_glb or p.node == null:
-		return
-	if p.visual_state == state_name and p.visual_model != null:
-		return
-	var path := _blue_asset_path(p, state_name)
-	if p.visual_model != null and p.visual_path == path:
-		p.visual_state = state_name
-		return
-	var model: Node3D = _instantiate_glb(path)
-	if model == null:
-		return
-	if p.visual_model != null and is_instance_valid(p.visual_model):
-		p.visual_model.queue_free()
-	p.visual_model = model
-	p.visual_state = state_name
-	p.visual_path = path
-	model.name = "Model"
-	model.rotation_degrees = Vector3(0.0, BLUE_MODEL_YAW_OFFSET, 0.0)
-	p.node.add_child(model)
-	_normalize_blue_model(model)
-	p.animation_player = _find_animation_player(model)
-	if p.animation_player != null:
-		_play_first_animation(p.animation_player)
-		_normalize_blue_model(model)
+# Builds the shared library of named clips extracted from the animation-only action GLBs.
+func _ensure_player_anim_library() -> bool:
+	if player_anim_ready:
+		return player_anim_library != null
+	player_anim_ready = true
+	var lib := AnimationLibrary.new()
+	for state_name in PLAYER_ANIM_FILES:
+		var entry: Array = PLAYER_ANIM_FILES[state_name]
+		var path: String = PLAYER_ASSET_DIR + entry[0]
+		var anim := _load_glb_animation(path)
+		if anim == null:
+			push_warning("Player animation missing or unreadable: %s" % path)
+			continue
+		if entry[1]:
+			anim.loop_mode = Animation.LOOP_LINEAR
+		lib.add_animation(state_name, anim)
+	if not lib.has_animation("idle"):
+		push_warning("Player animation library missing required idle clip.")
+		return false
+	player_anim_library = lib
+	return true
 
-func _play_blue_action(p: PlayerState, state_name: String, duration: float) -> void:
+func _load_glb_animation(path: String) -> Animation:
+	if not ResourceLoader.exists(path, "PackedScene"):
+		push_warning("GLB animation file is not imported as PackedScene: %s" % path)
+		return null
+	var packed := ResourceLoader.load(path, "PackedScene") as PackedScene
+	if packed == null:
+		push_warning("GLB animation file failed to load: %s" % path)
+		return null
+	var scene := packed.instantiate()
+	var ap := _find_animation_player(scene)
+	var anim: Animation = null
+	if ap != null:
+		var anim_name := _first_glb_animation(ap)
+		if not String(anim_name).is_empty():
+			anim = ap.get_animation(anim_name).duplicate()
+	else:
+		push_warning("GLB has no AnimationPlayer: %s" % path)
+	scene.free()
+	return anim
+
+func _first_glb_animation(player: AnimationPlayer) -> StringName:
+	if player.has_animation(PLAYER_GLTF_ANIM):
+		return StringName(PLAYER_GLTF_ANIM)
+	for anim_name in player.get_animation_list():
+		if String(anim_name).to_lower() != "reset":
+			return anim_name
+	return StringName()
+
+func _set_glb_visual_state(p: PlayerState, state_name: String) -> void:
+	if not p.uses_glb or p.animation_player == null:
+		return
+	if p.visual_state == state_name:
+		return
+	if not p.animation_player.has_animation(state_name):
+		return
+	p.visual_state = state_name
+	p.animation_player.play(state_name, 0.15)
+
+func _play_glb_action(p: PlayerState, state_name: String, duration: float) -> void:
 	if not p.uses_glb:
 		return
-	_set_blue_visual_state(p, state_name)
+	_set_glb_visual_state(p, state_name)
 	p.action_timer = duration
-
-func _blue_asset_path(p: PlayerState, state_name: String) -> String:
-	# Most action files in this asset pack are animation-only GLBs without meshes.
-	# Use the visible character mesh for the blue team; action files can be retargeted later.
-	return BLUE_ASSET_DIR + "Ch38_nonPBR.glb"
 
 func _instantiate_glb(path: String):
 	var packed: PackedScene = null
@@ -1146,31 +1252,49 @@ func _find_animation_player(node: Node) -> AnimationPlayer:
 			return found
 	return null
 
-func _play_first_animation(player: AnimationPlayer) -> void:
-	var names := player.get_animation_list()
-	for anim_name in names:
-		if String(anim_name).to_lower() != "reset":
-			player.play(anim_name)
-			return
-	if names.size() > 0:
-		player.play(names[0])
-
-func _normalize_blue_model(model: Node3D) -> void:
+func _place_glb_model(model: Node3D) -> void:
 	model.scale = Vector3.ONE
 	model.position = Vector3.ZERO
 	var bounds := _node_local_bounds(model)
 	if bounds.size.length() <= 0.001 or bounds.size.y <= 0.001:
-		model.scale = Vector3.ONE * BLUE_MODEL_SCALE
-		model.position = Vector3(0.0, BLUE_MODEL_Y_OFFSET, 0.0)
+		model.scale = Vector3.ONE * PLAYER_GLB_SCALE
+		model.position = Vector3(0.0, PLAYER_GLB_Y_OFFSET, 0.0)
+		push_warning("Player GLB bounds unavailable; using fixed imported-model scale.")
 		return
-	var scale := (BLUE_MODEL_TARGET_HEIGHT / bounds.size.y) * BLUE_MODEL_SCALE
+	var scale := PLAYER_GLB_SCALE
 	var center := bounds.position + bounds.size * 0.5
 	model.scale = Vector3.ONE * scale
-	model.position = Vector3(-center.x * scale, BLUE_MODEL_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
+	model.position = Vector3(-center.x * scale, PLAYER_GLB_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
+
+func _apply_team_tint(model: Node3D, team_index: int) -> void:
+	var tint := Color(0.95, 0.10, 0.08) if team_index == 0 else Color(0.08, 0.36, 1.0)
+	_apply_team_tint_recursive(model, tint)
+
+func _apply_team_tint_recursive(node: Node, tint: Color) -> void:
+	if node is MeshInstance3D and _is_uniform_mesh(node.name):
+		var mesh_instance := node as MeshInstance3D
+		var mesh := mesh_instance.mesh
+		if mesh != null:
+			for surface_idx in mesh.get_surface_count():
+				var base_mat := mesh_instance.get_surface_override_material(surface_idx)
+				if base_mat == null:
+					base_mat = mesh.surface_get_material(surface_idx)
+				var mat: Material = base_mat.duplicate() if base_mat != null else StandardMaterial3D.new()
+				if mat is BaseMaterial3D:
+					var base := mat as BaseMaterial3D
+					base.albedo_color = base.albedo_color.lerp(tint, 0.62)
+				mesh_instance.set_surface_override_material(surface_idx, mat)
+	for child: Node in node.get_children():
+		_apply_team_tint_recursive(child, tint)
+
+func _is_uniform_mesh(node_name: StringName) -> bool:
+	var n := String(node_name).to_lower()
+	return n.contains("shirt") or n.contains("short") or n.contains("sock")
 
 func _node_local_bounds(root: Node3D) -> AABB:
 	var state := [false, Vector3.ZERO, Vector3.ZERO]
-	_accumulate_local_bounds(root, Transform3D.IDENTITY, state)
+	for child: Node in root.get_children():
+		_accumulate_local_bounds(child, Transform3D.IDENTITY, state)
 	if not state[0]:
 		return AABB()
 	return AABB(state[1], state[2] - state[1])
@@ -1229,7 +1353,7 @@ func _create_ball_trail() -> void:
 		vfx_root.add_child(trail)
 		ball_trail.append(trail)
 
-func _reset_game(scoring_team_side: int) -> void:
+func _reset_game(kickoff_side: int) -> void:
 	ball.x = 0.0
 	ball.y = 0.0
 	ball.vx = 0.0
@@ -1243,10 +1367,8 @@ func _reset_game(scoring_team_side: int) -> void:
 	_clear_owner()
 	_reset_players(team_red)
 	_reset_players(team_blue)
-	if scoring_team_side == -1:
-		_set_owner(0, 5)
-	else:
-		_set_owner(1, 5)
+	var kickoff_team := _team_index_for_side(kickoff_side)
+	_set_owner(kickoff_team, 5)
 	var owner := _owner_player()
 	if owner != null:
 		owner.x = 0.0
@@ -1263,6 +1385,11 @@ func _reset_players(team: Array[PlayerState]) -> void:
 		p.kick_power = 0.0
 		p.hold_timer = 0.0
 		p.is_moving = false
+
+func _team_index_for_side(side: int) -> int:
+	if not team_red.is_empty() and team_red[0].side == side:
+		return 0
+	return 1
 
 func _read_input() -> void:
 	var allow := kickoff_timer <= 0.0
@@ -1348,14 +1475,20 @@ func _update_ball(delta: float) -> int:
 		if absf(ball.y) > GOAL_HALF_WIDTH:
 			ball.vx *= -1.0
 		elif ball.x > 0.0:
-			score_left += 1
-			_reset_game(1)
-			return -1
+			return _score_goal_against(1)
 		else:
-			score_right += 1
-			_reset_game(-1)
-			return 1
+			return _score_goal_against(-1)
 	return 0
+
+func _score_goal_against(goal_side: int) -> int:
+	var scoring_side := -goal_side
+	if _team_index_for_side(scoring_side) == 0:
+		score_left += 1
+		_reset_game(goal_side)
+		return -1
+	score_right += 1
+	_reset_game(goal_side)
+	return 1
 
 func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, is_user_team: bool, delta: float) -> void:
 	var user_idx := _nearest_user_player(team, team_idx) if is_user_team else -1
@@ -1368,7 +1501,8 @@ func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_
 			_update_user_player(p, snap, team_idx, i, delta)
 		elif kickoff_timer <= 0.0:
 			_update_ai_player(p, team, opponents, team_idx, i, delta)
-		_try_capture_ball(team, team_idx, i)
+		if kickoff_timer <= 0.0:
+			_try_capture_ball(team, team_idx, i)
 
 func _has_user_input(snap: InputSnapshot, p: PlayerState) -> bool:
 	return snap.axis != Vector2.ZERO or snap.shoot_held or snap.shoot_prev or p.kick_power > 0.0
@@ -1406,6 +1540,8 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 			_kick_from_player(p, _aim_target(snap, p), p.kick_power, true)
 	else:
 		p.kick_power = 0.0
+		if ball.owner_team != team_idx or ball.owner_index != player_idx:
+			ball.charging_power = 0.0
 
 func _aim_target(snap: InputSnapshot, p: PlayerState) -> Vector2:
 	if snap.aim_absolute:
@@ -1547,7 +1683,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
 	_play_kick()
-	_play_blue_action(p, "kick", 0.7)
+	_play_glb_action(p, "kick", 0.7)
 
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
 	var p := team[player_idx]
@@ -1557,14 +1693,14 @@ func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int)
 	if Vector2(p.x - ball.x, p.y - ball.y).length() < capture_radius:
 		if ball.owner_team == -1 and p.stun_timer <= 0.0:
 			_set_owner(team_idx, player_idx)
-			_play_blue_action(p, "receive", 0.45)
+			_play_glb_action(p, "receive", 0.45)
 		elif ball.owner_team != -1 and _owner_side() != p.side and p.stun_timer <= 0.0:
 			var old := _owner_player()
 			if old != null and old.role != PlayerRole.GOALKEEPER:
 				old.stun_timer = 0.45
 				old.kick_power = 0.0
 				_set_owner(team_idx, player_idx)
-				_play_blue_action(p, "tackle", 0.55)
+				_play_glb_action(p, "tackle", 0.55)
 
 func _move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
@@ -1604,7 +1740,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	if p.node == null:
 		return
 	if p.uses_glb:
-		_update_blue_player_visual(p, owns_ball, delta)
+		_update_glb_player_visual(p, owns_ball, delta)
 		return
 	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
 	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
@@ -1615,7 +1751,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	(p.node.get_node("ArmR") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
-	var is_selected := (p.side == -1 and team_red.find(p) == selected_index[0]) or (p.side == 1 and num_players == 2 and team_blue.find(p) == selected_index[1])
+	var is_selected := (p.team_index == 0 and team_red.find(p) == selected_index[0]) or (p.team_index == 1 and num_players == 2 and team_blue.find(p) == selected_index[1])
 	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
@@ -1625,7 +1761,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	else:
 		p.node.position.y = 0.0
 
-func _update_blue_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
 	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
 	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
 	if face.length() > 0.001:
@@ -1634,10 +1770,10 @@ func _update_blue_player_visual(p: PlayerState, owns_ball: bool, delta: float) -
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
 		if p.role == PlayerRole.GOALKEEPER:
-			_set_blue_visual_state(p, "run" if p.is_moving else "gk_idle")
+			_set_glb_visual_state(p, "run" if p.is_moving else "gk_idle")
 		else:
-			_set_blue_visual_state(p, "run" if p.is_moving else "idle")
-	var is_selected := (num_players == 2 and team_blue.find(p) == selected_index[1])
+			_set_glb_visual_state(p, "run" if p.is_moving else "idle")
+	var is_selected := (p.team_index == 0 and team_red.find(p) == selected_index[0]) or (p.team_index == 1 and num_players == 2 and team_blue.find(p) == selected_index[1])
 	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
@@ -1723,10 +1859,12 @@ func _set_owner(team_idx: int, player_idx: int) -> void:
 	ball.owner_team = team_idx
 	ball.owner_index = player_idx
 	ball.is_super_shot = false
+	ball.charging_power = 0.0
 
 func _clear_owner() -> void:
 	ball.owner_team = -1
 	ball.owner_index = -1
+	ball.charging_power = 0.0
 
 func _owner_player() -> PlayerState:
 	if ball.owner_team == 0 and ball.owner_index >= 0 and ball.owner_index < team_red.size():

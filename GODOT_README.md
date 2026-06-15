@@ -12,7 +12,7 @@ The previous 2D port remains available as backup:
 
 ## Run
 
-Open this folder in Godot 4.3+ and run the main scene.
+Open this folder in Godot 4.6+ and run the main scene.
 
 Main files:
 
@@ -49,15 +49,15 @@ The 3D build includes:
 - Broadcast angled `Camera3D`.
 - 3D pitch with modeled field lines.
 - 3D goals with posts, crossbars, depth, and transparent net material.
-- Procedural low-poly 3D players for both teams.
+- Imported GLB players for both teams, with per-team uniform tinting and procedural fallback safety.
 - 3D ball with mapped checker material, spin, height, glow, and trail.
 - Stadium stands with concrete/seat materials.
 - Crowd billboard cards using existing fan assets.
-- `DirectionalLight3D` sun with shadows.
-- Six `SpotLight3D` stadium floodlights.
+- `DirectionalLight3D` moon key light.
+- Four `SpotLight3D` stadium floodlights.
 - `OmniLight3D` special-shot glow attached to the ball.
 - World environment with sky, ambient light, tonemapping, and glow.
-- Scoreboard UI and emissive 3D scoreboard text.
+- Scoreboard UI and stadium scoreboard shell.
 - Goal celebration confetti.
 
 ## Blue Team GLB Players
@@ -68,16 +68,16 @@ Blue team players load animated `.glb` assets from:
 
 Runtime behavior:
 
-- Goalkeeper uses goalkeeper idle/pass/catch/sidestep GLBs.
-- Outfield players use offensive idle, jog, kick, receive, and tackle GLBs.
-- Red team remains procedural for visual contrast and fallback safety.
+- Goalkeeper uses goalkeeper idle animation when available.
+- Outfield players use offensive idle, jog, kick, receive, and tackle animations when available.
+- Both teams use the same character mesh/animation pipeline for visual consistency.
 - If a GLB is not imported or fails to load, the player falls back to the procedural mesh.
 
 If the imported model faces the wrong way or has wrong scale, tune these constants in `scripts/match_controller_3d.gd`:
 
-- `BLUE_MODEL_SCALE`
-- `BLUE_MODEL_Y_OFFSET`
-- `BLUE_MODEL_YAW_OFFSET`
+- `PLAYER_GLB_SCALE`
+- `PLAYER_GLB_Y_OFFSET`
+- `PLAYER_GLB_YAW_OFFSET`
 
 ## Next C++ GDExtension Step
 
