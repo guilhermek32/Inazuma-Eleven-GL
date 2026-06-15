@@ -268,7 +268,7 @@ func _jersey_label(height: float) -> Label3D:
 	label.name = "JerseyNumber"
 	label.text = ""
 	label.font_size = 64
-	label.pixel_size = 0.004
+	label.pixel_size = 0.006
 	label.modulate = Color(1.0, 1.0, 1.0, 0.92)
 	label.outline_size = 7
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.88)
