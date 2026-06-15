@@ -16,6 +16,10 @@ var stadium_root: Node3D
 var players_root: Node3D
 var ball_root: Node3D
 var vfx_root: Node3D
+var material_factory: MaterialFactory
+var pitch_builder: PitchBuilder
+var stadium_builder: StadiumBuilder
+var player_factory: PlayerFactory
 var ui_layer: CanvasLayer
 var score_label: Label
 var timer_label: Label
@@ -64,16 +68,31 @@ var bus_music := -1
 var bus_sfx := -1
 
 func _ready() -> void:
-	_build_materials()
+	material_factory = MaterialFactory.new()
+	material_factory._build_materials()
+	materials = material_factory.materials
 	_build_scene_roots()
-	_build_environment()
-	_build_camera()
-	_build_lighting()
-	_build_pitch()
-	_build_goals()
-	_build_stadium()
+	stadium_builder = StadiumBuilder.new()
+	stadium_builder.mf = material_factory
+	stadium_builder.host = self
+	stadium_builder.stadium_root = stadium_root
+	stadium_builder._build_environment()
+	stadium_builder._build_camera()
+	camera_rig = stadium_builder.camera_rig
+	camera_3d = stadium_builder.camera_3d
+	stadium_builder._build_lighting()
+	pitch_builder = PitchBuilder.new()
+	pitch_builder.mf = material_factory
+	pitch_builder.pitch_root = pitch_root
+	pitch_builder.lines_root = lines_root
+	pitch_builder.goals_root = goals_root
+	pitch_builder._build_pitch()
+	pitch_builder._build_goals()
+	stadium_builder._build_stadium()
 	_build_ui()
 	_setup_input_actions()
+	player_factory = PlayerFactory.new()
+	player_factory.mf = material_factory
 	_create_teams()
 	_create_ball()
 	_create_ball_trail()
@@ -218,43 +237,6 @@ func _refresh_two_player_availability() -> void:
 	if play_2p_hint != null:
 		play_2p_hint.text = "" if pads >= 1 else "Connect 1 controller for 2-player"
 
-func _build_materials() -> void:
-	materials.grass = _material(Color.WHITE, 0.9, 0.0, _noise_texture(Color(0.10, 0.35, 0.13), 0.05))
-	materials.grass_dark = _material(Color.WHITE, 0.9, 0.0, _noise_texture(Color(0.088, 0.315, 0.115), 0.05))
-	materials.line = _material(Color(0.95, 0.97, 0.92), 0.55)
-	materials.goal = _material(Color(0.92, 0.93, 0.90), 0.28, 0.25)
-	materials.net = _material(Color(1.0, 1.0, 1.0, 0.99), 0.7, 0.0, _net_texture())
-	materials.concrete = _material(Color(0.37, 0.36, 0.34), 0.92, 0.0, _checker_texture(Color(0.28, 0.28, 0.27), Color(0.45, 0.44, 0.41), 128, 16))
-	materials.asphalt = _material(Color.WHITE, 0.95, 0.0, _noise_texture(Color(0.125, 0.13, 0.145), 0.06))
-	materials.wall = _material(Color(0.15, 0.16, 0.18), 0.95)
-	materials.wall_top = _emission_material(Color(0.95, 0.88, 0.70), 0.5)
-	materials.flag = _emission_material(Color(1.0, 0.85, 0.15), 0.8)
-	materials.seat_red = _material(Color(0.55, 0.06, 0.05), 0.65)
-	materials.seat_blue = _material(Color(0.04, 0.10, 0.55), 0.65)
-	materials.metal_dark = _material(Color(0.20, 0.21, 0.22), 0.38, 0.55)
-	materials.light_emission = _emission_material(Color(1.0, 0.94, 0.72), 3.5)
-	materials.ad_panels = [
-		_emission_material(Color(0.92, 0.94, 0.98), 1.0),
-		_emission_material(Color(0.10, 0.30, 0.95), 1.0),
-		_emission_material(Color(0.90, 0.12, 0.10), 1.0),
-		_emission_material(Color(1.0, 0.78, 0.10), 1.0),
-	]
-	materials.ad_text_colors = [Color(0.08, 0.10, 0.25), Color.WHITE, Color.WHITE, Color(0.15, 0.10, 0.02)]
-	materials.scoreboard = _emission_material(Color(0.1, 0.85, 0.25), 1.4)
-	materials.player_red = _material(Color(0.85, 0.05, 0.03), 0.58)
-	materials.player_blue = _material(Color(0.04, 0.20, 0.88), 0.58)
-	materials.goalkeeper = _material(Color(1.0, 0.58, 0.05), 0.58)
-	materials.skin = _material(Color(0.72, 0.45, 0.28), 0.62)
-	materials.hair = _material(Color(0.12, 0.07, 0.035), 0.7)
-	materials.boots = _material(Color(0.03, 0.03, 0.035), 0.45)
-	materials.ball = _material(Color.WHITE, 0.42, 0.0, _checker_texture(Color(0.96, 0.96, 0.92), Color(0.02, 0.02, 0.025), 128, 24))
-	materials.selection = _emission_material(Color(1.0, 0.92, 0.08), 1.8)
-	materials.power = _emission_material(Color(0.1, 0.65, 1.0), 1.7)
-	materials.trail = _material(Color(1.0, 0.86, 0.25, 0.36), 0.35)
-	materials.confetti_red = _emission_material(Color(1.0, 0.08, 0.04), 1.1)
-	materials.confetti_blue = _emission_material(Color(0.08, 0.28, 1.0), 1.1)
-	materials.confetti_gold = _emission_material(Color(1.0, 0.84, 0.12), 1.3)
-
 func _build_scene_roots() -> void:
 	pitch_root = _new_root("Pitch")
 	lines_root = _new_root("FieldLines")
@@ -269,382 +251,6 @@ func _new_root(root_name: String) -> Node3D:
 	node.name = root_name
 	add_child(node)
 	return node
-
-func _build_environment() -> void:
-	var world := WorldEnvironment.new()
-	world.name = "WorldEnvironment"
-	var env := Environment.new()
-	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.010, 0.018, 0.045)
-	sky_mat.sky_horizon_color = Color(0.055, 0.075, 0.13)
-	sky_mat.ground_bottom_color = Color(0.010, 0.012, 0.02)
-	sky_mat.ground_horizon_color = Color(0.04, 0.05, 0.08)
-	sky.sky_material = sky_mat
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.45, 0.55, 0.78)
-	env.ambient_light_energy = 0.4
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.glow_enabled = true
-	env.glow_intensity = 0.5
-	env.glow_bloom = 0.3
-	world.environment = env
-	add_child(world)
-
-func _build_camera() -> void:
-	camera_rig = Node3D.new()
-	camera_rig.name = "CameraRig"
-	camera_rig.position = Vector3(0.0, 18.0, 24.0)
-	add_child(camera_rig)
-	camera_3d = Camera3D.new()
-	camera_3d.name = "Camera3D"
-	camera_3d.fov = 49.0
-	camera_3d.current = true
-	camera_rig.add_child(camera_3d)
-	camera_3d.look_at(Vector3.ZERO, Vector3.UP)
-
-func _build_lighting() -> void:
-	var moon := DirectionalLight3D.new()
-	moon.name = "MoonLight"
-	moon.light_color = Color(0.60, 0.68, 0.88)
-	moon.light_energy = 0.3
-	moon.shadow_enabled = false
-	moon.light_angular_distance = 0.8
-	moon.rotation_degrees = Vector3(-52.0, -34.0, 0.0)
-	add_child(moon)
-	var flood_root := Node3D.new()
-	flood_root.name = "FloodLights"
-	add_child(flood_root)
-	var positions := [
-		Vector3(-24.0, 14.0, -19.0),
-		Vector3(24.0, 14.0, -19.0),
-		Vector3(-24.0, 14.0, 19.0),
-		Vector3(24.0, 14.0, 19.0),
-	]
-	for i in positions.size():
-		_add_floodlight(flood_root, positions[i], i)
-
-func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
-	var tower := Node3D.new()
-	tower.name = "FloodlightTower%d" % index
-	tower.position = pos
-	parent.add_child(tower)
-	var pole := _mesh("Pole", CylinderMesh.new(), materials.metal_dark, Vector3.ZERO)
-	pole.mesh.height = pos.y
-	pole.mesh.top_radius = 0.08
-	pole.mesh.bottom_radius = 0.10
-	pole.position.y = -pos.y * 0.5
-	tower.add_child(pole)
-	var lamp := _mesh("Lamp", BoxMesh.new(), materials.light_emission, Vector3.ZERO)
-	lamp.mesh.size = Vector3(1.5, 0.42, 0.35)
-	tower.add_child(lamp)
-	var spot := SpotLight3D.new()
-	spot.name = "SpotLight3D"
-	spot.light_color = Color(0.78, 0.88, 1.0)
-	spot.light_energy = 7.0
-	spot.spot_range = 60.0
-	spot.spot_angle = 48.0
-	spot.light_size = 1.2
-	spot.shadow_enabled = index < 4
-	tower.add_child(spot)
-	spot.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
-
-func _build_pitch() -> void:
-	var field_size := Vector2(GameConfig.FIELD_HALF_WIDTH * 2.0 * GameConfig.FIELD_SCALE, GameConfig.FIELD_HALF_HEIGHT * 2.0 * GameConfig.FIELD_SCALE)
-	var pitch := _mesh("GrassPitch", BoxMesh.new(), materials.grass, Vector3(0.0, -0.04, 0.0))
-	pitch.mesh.size = Vector3(field_size.x, 0.08, field_size.y)
-	pitch_root.add_child(pitch)
-	for i in 10:
-		if i % 2 == 0:
-			var stripe := _mesh("GrassStripe%d" % i, BoxMesh.new(), materials.grass_dark, Vector3.ZERO)
-			stripe.mesh.size = Vector3(field_size.x / 10.0, 0.012, field_size.y)
-			stripe.position = Vector3(-field_size.x * 0.5 + field_size.x * (float(i) + 0.5) / 10.0, 0.012, 0.0)
-			pitch_root.add_child(stripe)
-	_add_field_lines()
-
-func _add_field_lines() -> void:
-	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE
-	var z := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE
-	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(x, 0.06, -z), 0.07, "SidelineTop")
-	_add_line_segment(Vector3(-x, 0.06, z), Vector3(x, 0.06, z), 0.07, "SidelineBottom")
-	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(-x, 0.06, z), 0.07, "EndlineLeft")
-	_add_line_segment(Vector3(x, 0.06, -z), Vector3(x, 0.06, z), 0.07, "EndlineRight")
-	_add_line_segment(Vector3(0.0, 0.065, -z), Vector3(0.0, 0.065, z), 0.06, "HalfwayLine")
-	_add_circle(Vector3.ZERO, GameConfig.CENTER_CIRCLE_RADIUS * GameConfig.FIELD_SCALE, 64, 0.055, "CenterCircle")
-	_add_spot(Vector3(0.0, 0.055, 0.0), "CenterSpot")
-	for side in [-1, 1]:
-		_add_box_lines(side, GameConfig.PENALTY_AREA_WIDTH, GameConfig.PENALTY_AREA_HEIGHT, "Penalty")
-		_add_box_lines(side, GameConfig.GOAL_AREA_WIDTH, GameConfig.GOAL_AREA_HEIGHT, "GoalArea")
-		_add_penalty_arc(side)
-		_add_spot(Vector3((GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_SPOT_DIST) * GameConfig.FIELD_SCALE * float(side), 0.055, 0.0), "PenaltySpot%d" % side)
-	for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]:
-		_add_corner_arc(corner)
-		_add_corner_flag(corner)
-
-func _add_box_lines(side: int, depth: float, half_z: float, prefix: String) -> void:
-	var xb := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * float(side)
-	var xi := (GameConfig.FIELD_BOUNDARY_X - depth) * GameConfig.FIELD_SCALE * float(side)
-	var z := half_z * GameConfig.FIELD_SCALE
-	_add_line_segment(Vector3(xb, 0.07, -z), Vector3(xi, 0.07, -z), 0.055, "%sA%d" % [prefix, side])
-	_add_line_segment(Vector3(xb, 0.07, z), Vector3(xi, 0.07, z), 0.055, "%sB%d" % [prefix, side])
-	_add_line_segment(Vector3(xi, 0.07, -z), Vector3(xi, 0.07, z), 0.055, "%sC%d" % [prefix, side])
-
-func _add_penalty_arc(side: int) -> void:
-	var radius := GameConfig.CENTER_CIRCLE_RADIUS * GameConfig.FIELD_SCALE
-	var spot_x := (GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_SPOT_DIST) * GameConfig.FIELD_SCALE * float(side)
-	var box_x := (GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_AREA_WIDTH) * GameConfig.FIELD_SCALE * float(side)
-	var half_angle := acos(absf(box_x - spot_x) / radius)
-	var facing := PI if side == 1 else 0.0
-	_add_arc(Vector3(spot_x, 0.075, 0.0), radius, facing - half_angle, facing + half_angle, 18, 0.055, "PenaltyArc%d" % side)
-
-func _add_corner_arc(corner: Vector2) -> void:
-	var center := Vector3(GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * corner.x, 0.075, GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE * corner.y)
-	var a_start := 0.0
-	if corner == Vector2(1, -1):
-		a_start = PI * 0.5
-	elif corner == Vector2(1, 1):
-		a_start = PI
-	elif corner == Vector2(-1, 1):
-		a_start = PI * 1.5
-	_add_arc(center, GameConfig.CORNER_ARC_RADIUS * GameConfig.FIELD_SCALE, a_start, a_start + PI * 0.5, 8, 0.05, "CornerArc%d%d" % [corner.x, corner.y])
-
-func _add_corner_flag(corner: Vector2) -> void:
-	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * corner.x
-	var z := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE * corner.y
-	var pole := _mesh("CornerPole%d%d" % [corner.x, corner.y], CylinderMesh.new(), materials.goal, Vector3(x, 0.75, z))
-	pole.mesh.height = 1.5
-	pole.mesh.top_radius = 0.022
-	pole.mesh.bottom_radius = 0.022
-	pitch_root.add_child(pole)
-	var flag := _mesh("CornerFlag%d%d" % [corner.x, corner.y], BoxMesh.new(), materials.flag, Vector3(x - corner.x * 0.2, 1.36, z))
-	flag.mesh.size = Vector3(0.38, 0.24, 0.02)
-	pitch_root.add_child(flag)
-
-func _add_spot(pos: Vector3, node_name: String) -> void:
-	var spot := _mesh(node_name, CylinderMesh.new(), materials.line, pos)
-	spot.mesh.top_radius = 0.12
-	spot.mesh.bottom_radius = 0.12
-	spot.mesh.height = 0.02
-	lines_root.add_child(spot)
-
-func _add_circle(center: Vector3, radius: float, segments: int, width: float, node_name: String) -> void:
-	for i in segments:
-		var a0 := float(i) / float(segments) * TAU
-		var a1 := float(i + 1) / float(segments) * TAU
-		var p0 := center + Vector3(cos(a0) * radius, 0.075, sin(a0) * radius)
-		var p1 := center + Vector3(cos(a1) * radius, 0.075, sin(a1) * radius)
-		_add_line_segment(p0, p1, width, "%s%d" % [node_name, i])
-
-func _add_arc(center: Vector3, radius: float, a_start: float, a_end: float, segments: int, width: float, node_name: String) -> void:
-	for i in segments:
-		var a0 := lerpf(a_start, a_end, float(i) / float(segments))
-		var a1 := lerpf(a_start, a_end, float(i + 1) / float(segments))
-		var p0 := center + Vector3(cos(a0) * radius, 0.0, sin(a0) * radius)
-		var p1 := center + Vector3(cos(a1) * radius, 0.0, sin(a1) * radius)
-		_add_line_segment(p0, p1, width, "%s%d" % [node_name, i])
-
-func _add_line_segment(a: Vector3, b: Vector3, width: float, node_name: String) -> void:
-	var mid := (a + b) * 0.5
-	var len := a.distance_to(b)
-	var line := _mesh(node_name, BoxMesh.new(), materials.line, mid)
-	line.mesh.size = Vector3(len, 0.035, width)
-	line.rotation.y = atan2(a.z - b.z, b.x - a.x)
-	lines_root.add_child(line)
-
-func _build_goals() -> void:
-	_add_goal(-1)
-	_add_goal(1)
-
-func _add_goal(side: int) -> void:
-	var goal := Node3D.new()
-	goal.name = "GoalLeft" if side == -1 else "GoalRight"
-	goals_root.add_child(goal)
-	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * float(side)
-	var depth := GameConfig.GOAL_DEPTH * GameConfig.FIELD_SCALE * float(side)
-	var half_w := GameConfig.GOAL_HALF_WIDTH * GameConfig.FIELD_SCALE
-	var height := 1.8
-	var post_a := _goal_post(Vector3(x, height * 0.5, -half_w))
-	var post_b := _goal_post(Vector3(x, height * 0.5, half_w))
-	var bar := _goal_bar(Vector3(x, height, 0.0), half_w * 2.0, Vector3(90.0, 0.0, 0.0))
-	var back_bar := _goal_bar(Vector3(x + depth, height, 0.0), half_w * 2.0, Vector3(90.0, 0.0, 0.0))
-	var top_depth_a := _goal_bar(Vector3(x + depth * 0.5, height, -half_w), absf(depth), Vector3(0.0, 0.0, 90.0))
-	var top_depth_b := _goal_bar(Vector3(x + depth * 0.5, height, half_w), absf(depth), Vector3(0.0, 0.0, 90.0))
-	goal.add_child(post_a)
-	goal.add_child(post_b)
-	goal.add_child(bar)
-	goal.add_child(back_bar)
-	goal.add_child(top_depth_a)
-	goal.add_child(top_depth_b)
-	var net_back := _net_panel("NetBack", Vector3(x + depth, height * 0.5, 0.0), Vector3(0.03, height, half_w * 2.0))
-	goal.add_child(net_back)
-	var net_top := _net_panel("NetTop", Vector3(x + depth * 0.5, height, 0.0), Vector3(absf(depth), 0.03, half_w * 2.0))
-	goal.add_child(net_top)
-	for net_side in [-1.0, 1.0]:
-		var panel := _net_panel("NetSide%d" % net_side, Vector3(x + depth * 0.5, height * 0.5, half_w * net_side), Vector3(absf(depth), height, 0.03))
-		goal.add_child(panel)
-
-func _net_panel(panel_name: String, pos: Vector3, size: Vector3) -> MeshInstance3D:
-	var panel := _mesh(panel_name, BoxMesh.new(), materials.net, pos)
-	panel.mesh.size = size
-	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return panel
-
-func _goal_post(pos: Vector3) -> MeshInstance3D:
-	var post := _mesh("Post", CylinderMesh.new(), materials.goal, pos)
-	post.mesh.height = 1.8
-	post.mesh.top_radius = 0.055
-	post.mesh.bottom_radius = 0.055
-	return post
-
-func _goal_bar(pos: Vector3, length: float, rot_degrees: Vector3) -> MeshInstance3D:
-	var bar := _mesh("Bar", CylinderMesh.new(), materials.goal, pos)
-	bar.mesh.height = length
-	bar.mesh.top_radius = 0.055
-	bar.mesh.bottom_radius = 0.055
-	bar.rotation_degrees = rot_degrees
-	return bar
-
-func _build_stadium() -> void:
-	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
-	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
-	_add_ground_apron()
-	_add_perimeter_walls()
-	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - 5.0), Vector3(field_x * 2.5, 2.0, 5.0), materials.concrete)
-	_add_stand("SouthStand", Vector3(0.0, 1.0, field_z + 5.0), Vector3(field_x * 2.5, 2.0, 5.0), materials.concrete)
-	_add_stand("WestStand", Vector3(-field_x - 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), materials.concrete)
-	_add_stand("EastStand", Vector3(field_x + 5.5, 1.0, 0.0), Vector3(5.0, 2.0, field_z * 2.0), materials.concrete)
-	_add_crowd_cards(field_x, field_z)
-	_add_hoardings()
-	_add_scoreboard(Vector3(0.0, 5.2, -field_z - 7.8))
-
-func _add_ground_apron() -> void:
-	var apron := _mesh("GroundApron", BoxMesh.new(), materials.asphalt, Vector3(0.0, -0.06, 0.0))
-	apron.mesh.size = Vector3(72.0, 0.08, 68.0)
-	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	stadium_root.add_child(apron)
-
-func _add_perimeter_walls() -> void:
-	var walls := [
-		["NorthWall", Vector3(0.0, 4.0, -33.7), Vector3(72.0, 8.0, 0.6)],
-		["SouthWall", Vector3(0.0, 4.0, 33.7), Vector3(72.0, 8.0, 0.6)],
-		["WestWall", Vector3(-35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
-		["EastWall", Vector3(35.7, 4.0, 0.0), Vector3(0.6, 8.0, 68.0)],
-	]
-	for w in walls:
-		var wall := _mesh(w[0], BoxMesh.new(), materials.wall, w[1])
-		wall.mesh.size = w[2]
-		stadium_root.add_child(wall)
-		var band := _mesh("%sBand" % w[0], BoxMesh.new(), materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
-		band.mesh.size = Vector3(maxf(w[2].x, 0.8), 0.7, maxf(w[2].z, 0.8))
-		stadium_root.add_child(band)
-	var sign := Label3D.new()
-	sign.name = "StadiumSign"
-	sign.text = "INAZUMA STADIUM"
-	sign.font_size = 260
-	sign.modulate = Color(0.98, 0.92, 0.72)
-	sign.position = Vector3(0.0, 6.5, -33.3)
-	stadium_root.add_child(sign)
-
-func _add_hoardings() -> void:
-	var ads := ["INAZUMA", "RAIMON FC", "ELEVEN TV", "KICK & GO", "SUPERNOVA", "GOAL MART", "METEOR LTD", "STRIKER+"]
-	var bx := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE
-	var bz := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE
-	var idx := 0
-	for i in 8:
-		var x := -13.65 + float(i) * 3.9
-		_add_hoarding(Vector3(x, 0.0, -bz - 1.7), 0.0, ads[idx % ads.size()], idx)
-		idx += 1
-		_add_hoarding(Vector3(x, 0.0, bz + 1.7), PI, ads[idx % ads.size()], idx)
-		idx += 1
-	for i in 5:
-		var z := -7.8 + float(i) * 3.9
-		_add_hoarding(Vector3(-bx - 2.2, 0.0, z), PI * 0.5, ads[idx % ads.size()], idx)
-		idx += 1
-		_add_hoarding(Vector3(bx + 2.2, 0.0, z), -PI * 0.5, ads[idx % ads.size()], idx)
-		idx += 1
-
-func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
-	var board := Node3D.new()
-	board.name = "Hoarding%d" % idx
-	board.position = pos
-	board.rotation = Vector3(-0.12, yaw, 0.0)
-	stadium_root.add_child(board)
-	var frame := _mesh("Frame", BoxMesh.new(), materials.metal_dark, Vector3(0.0, 0.46, -0.04))
-	frame.mesh.size = Vector3(3.7, 0.92, 0.08)
-	board.add_child(frame)
-	var scheme: int = idx % materials.ad_panels.size()
-	var panel := _mesh("Panel", BoxMesh.new(), materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
-	panel.mesh.size = Vector3(3.55, 0.78, 0.05)
-	board.add_child(panel)
-	var label := Label3D.new()
-	label.name = "AdText"
-	label.text = text
-	label.font_size = 96
-	label.modulate = materials.ad_text_colors[scheme]
-	label.position = Vector3(0.0, 0.46, 0.06)
-	board.add_child(label)
-
-func _add_stand(stand_name: String, pos: Vector3, size: Vector3, mat: StandardMaterial3D) -> void:
-	var stand := Node3D.new()
-	stand.name = stand_name
-	stand.position = pos
-	stadium_root.add_child(stand)
-	for tier in 4:
-		var tier_mesh := _mesh("Tier%d" % tier, BoxMesh.new(), mat, Vector3(0.0, float(tier) * 0.55, 0.0))
-		tier_mesh.mesh.size = Vector3(size.x - float(tier) * 0.55, 0.42, size.z - float(tier) * 0.35)
-		stand.add_child(tier_mesh)
-		var seat_mat: Material = materials.seat_red if tier % 2 == 0 else materials.seat_blue
-		var seat := _mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
-		seat.mesh.size = Vector3(tier_mesh.mesh.size.x * 0.94, 0.08, tier_mesh.mesh.size.z * 0.72)
-		stand.add_child(seat)
-
-func _add_scoreboard(pos: Vector3) -> void:
-	var board := _mesh("Scoreboard", BoxMesh.new(), materials.scoreboard, pos)
-	board.mesh.size = Vector3(5.2, 1.8, 0.18)
-	stadium_root.add_child(board)
-	board.look_at(Vector3.ZERO, Vector3.UP)
-	for pole_side in [-1.0, 1.0]:
-		var pole := _mesh("ScoreboardPole%d" % pole_side, CylinderMesh.new(), materials.metal_dark, Vector3(pole_side * 1.8, pos.y * 0.5 - 0.45, pos.z))
-		pole.mesh.height = pos.y - 0.9
-		pole.mesh.top_radius = 0.09
-		pole.mesh.bottom_radius = 0.11
-		stadium_root.add_child(pole)
-
-func _add_crowd_cards(field_x: float, field_z: float) -> void:
-	var fan_textures: Array[Texture2D] = []
-	for path in [
-		"res://assets/fans/fans_red_1.png",
-		"res://assets/fans/fans_red_2.png",
-		"res://assets/fans/fans_blue_1.png",
-		"res://assets/fans/fans_blue_2.png",
-	]:
-		if ResourceLoader.exists(path):
-			fan_textures.append(load(path))
-	if fan_textures.is_empty():
-		return
-	for row in 3:
-		for i in 22:
-			var x := -field_x * 1.12 + float(i) * (field_x * 2.24 / 21.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, -field_z - 4.05 - row * 0.72), Vector3(0.0, PI, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 1) % fan_textures.size()], Vector3(x, 1.45 + row * 0.70, field_z + 4.05 + row * 0.72), Vector3.ZERO)
-	for row in 2:
-		for i in 14:
-			var z := -field_z * 0.9 + float(i) * (field_z * 1.8 / 13.0)
-			_add_fan_sprite(fan_textures[(i + row) % fan_textures.size()], Vector3(-field_x - 4.25 - row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, PI * 0.5, 0.0))
-			_add_fan_sprite(fan_textures[(i + row + 2) % fan_textures.size()], Vector3(field_x + 4.25 + row * 0.70, 1.45 + row * 0.70, z), Vector3(0.0, -PI * 0.5, 0.0))
-
-func _add_fan_sprite(texture: Texture2D, feet_pos: Vector3, rot: Vector3) -> void:
-	var sprite := Sprite3D.new()
-	sprite.name = "CrowdCard"
-	sprite.texture = texture
-	var fan_height := 1.55
-	sprite.pixel_size = fan_height / float(texture.get_height())
-	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
-	sprite.position = feet_pos + Vector3(0.0, fan_height * 0.5, 0.0)
-	sprite.rotation = rot
-	stadium_root.add_child(sprite)
 
 func _build_ui() -> void:
 	ui_layer = CanvasLayer.new()
@@ -965,268 +571,14 @@ func _create_teams() -> void:
 
 func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, side: int, role: int) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)
-	state.node = _create_player_visual(state)
+	state.node = player_factory._create_player_visual(state)
 	players_root.add_child(state.node)
 	team.append(state)
-
-func _create_player_visual(state: PlayerState) -> Node3D:
-	var glb_visual = _create_glb_player_visual(state)
-	if glb_visual != null:
-		return glb_visual
-	var root := Node3D.new()
-	root.name = "RedPlayer" if state.side == -1 else "BluePlayer"
-	var uniform: Material = materials.goalkeeper if state.role == GameConfig.PlayerRole.GOALKEEPER else (materials.player_red if state.side == -1 else materials.player_blue)
-	var body := _mesh("Body", BoxMesh.new(), uniform, Vector3(0.0, 0.78, 0.0))
-	body.mesh.size = Vector3(0.42, 0.82, 0.26)
-	root.add_child(body)
-	var head := _mesh("Head", SphereMesh.new(), materials.skin, Vector3(0.0, 1.34, 0.0))
-	head.mesh.radius = 0.22
-	head.mesh.height = 0.42
-	root.add_child(head)
-	var hair := _mesh("Hair", SphereMesh.new(), materials.hair, Vector3(0.0, 1.50, -0.02))
-	hair.mesh.radius = 0.19
-	hair.mesh.height = 0.18
-	root.add_child(hair)
-	for limb_name in ["ArmL", "ArmR", "LegL", "LegR"]:
-		var limb_mat: Material = uniform if limb_name.begins_with("Arm") else materials.boots
-		var limb := _mesh(limb_name, BoxMesh.new(), limb_mat, Vector3.ZERO)
-		limb.mesh.size = Vector3(0.13, 0.62, 0.13)
-		root.add_child(limb)
-	root.get_node("ArmL").position = Vector3(-0.32, 0.72, 0.0)
-	root.get_node("ArmR").position = Vector3(0.32, 0.72, 0.0)
-	root.get_node("LegL").position = Vector3(-0.13, 0.28, 0.0)
-	root.get_node("LegR").position = Vector3(0.13, 0.28, 0.0)
-	var marker := _mesh("SelectedRing", CylinderMesh.new(), materials.selection, Vector3(0.0, 0.035, 0.0))
-	marker.mesh.top_radius = 0.48
-	marker.mesh.bottom_radius = 0.48
-	marker.mesh.height = 0.025
-	marker.visible = false
-	root.add_child(marker)
-	var power := _mesh("PowerRing", CylinderMesh.new(), materials.power, Vector3(0.0, 0.07, 0.0))
-	power.mesh.top_radius = 0.64
-	power.mesh.bottom_radius = 0.64
-	power.mesh.height = 0.025
-	power.visible = false
-	root.add_child(power)
-	return root
-
-func _create_glb_player_visual(state: PlayerState):
-	var root := Node3D.new()
-	root.name = "RedGLBPlayer" if state.team_index == 0 else "BlueGLBPlayer"
-	state.uses_glb = true
-	state.node = root
-	var marker := _mesh("SelectedRing", CylinderMesh.new(), materials.selection, Vector3(0.0, 0.035, 0.0))
-	marker.mesh.top_radius = 0.48
-	marker.mesh.bottom_radius = 0.48
-	marker.mesh.height = 0.025
-	marker.visible = false
-	root.add_child(marker)
-	var power := _mesh("PowerRing", CylinderMesh.new(), materials.power, Vector3(0.0, 0.07, 0.0))
-	power.mesh.top_radius = 0.64
-	power.mesh.bottom_radius = 0.64
-	power.mesh.height = 0.025
-	power.visible = false
-	root.add_child(power)
-	# Load the character mesh once and drive its skeleton with retargeted Mixamo clips.
-	var model: Node3D = _instantiate_glb(GameConfig.PLAYER_ASSET_DIR + GameConfig.PLAYER_MESH_FILE)
-	if model == null:
-		push_warning("Player GLB mesh failed to load: %s" % (GameConfig.PLAYER_ASSET_DIR + GameConfig.PLAYER_MESH_FILE))
-		state.uses_glb = false
-		root.free()
-		return null
-	_place_glb_model(model)
-	_apply_team_tint(model, state.team_index)
-	model.name = "Model"
-	model.rotation_degrees = Vector3(0.0, GameConfig.PLAYER_GLB_YAW_OFFSET, 0.0)
-	root.add_child(model)
-	if _ensure_player_anim_library():
-		var anim := AnimationPlayer.new()
-		anim.name = "AnimationPlayer"
-		model.add_child(anim)
-		# Tracks read "Armature/Skeleton3D:bone", so resolve them from the model root.
-		anim.root_node = anim.get_path_to(model)
-		anim.add_animation_library("", player_anim_library)
-		state.animation_player = anim
-	else:
-		push_warning("Player GLB animations unavailable; using static mesh.")
-	state.visual_model = model
-	_set_glb_visual_state(state, "gk_idle" if state.role == GameConfig.PlayerRole.GOALKEEPER else "idle")
-	return root
-
-# Builds the shared library of named clips extracted from the animation-only action GLBs.
-func _ensure_player_anim_library() -> bool:
-	if player_anim_ready:
-		return player_anim_library != null
-	player_anim_ready = true
-	var lib := AnimationLibrary.new()
-	for state_name in GameConfig.PLAYER_ANIM_FILES:
-		var entry: Array = GameConfig.PLAYER_ANIM_FILES[state_name]
-		var path: String = GameConfig.PLAYER_ASSET_DIR + entry[0]
-		var anim := _load_player_animation(path)
-		if anim == null:
-			push_warning("Player animation missing or unreadable: %s" % path)
-			continue
-		if entry[1]:
-			anim.loop_mode = Animation.LOOP_LINEAR
-		lib.add_animation(state_name, anim)
-	if not lib.has_animation("idle"):
-		push_warning("Player animation library missing required idle clip.")
-		return false
-	player_anim_library = lib
-	return true
-
-func _load_player_animation(path: String) -> Animation:
-	if not ResourceLoader.exists(path, "PackedScene"):
-		push_warning("Player animation file is not imported as PackedScene: %s" % path)
-		return null
-	var packed := ResourceLoader.load(path, "PackedScene") as PackedScene
-	if packed == null:
-		push_warning("Player animation file failed to load: %s" % path)
-		return null
-	var scene := packed.instantiate()
-	var ap := _find_animation_player(scene)
-	var anim: Animation = null
-	if ap != null:
-		var anim_name := _first_glb_animation(ap)
-		if not String(anim_name).is_empty():
-			anim = ap.get_animation(anim_name).duplicate()
-	else:
-		push_warning("Player animation scene has no AnimationPlayer: %s" % path)
-	scene.free()
-	return anim
-
-func _first_glb_animation(player: AnimationPlayer) -> StringName:
-	if player.has_animation(GameConfig.PLAYER_GLTF_ANIM):
-		return StringName(GameConfig.PLAYER_GLTF_ANIM)
-	for anim_name in player.get_animation_list():
-		if String(anim_name).to_lower() != "reset":
-			return anim_name
-	return StringName()
-
-func _set_glb_visual_state(p: PlayerState, state_name: String) -> void:
-	if not p.uses_glb or p.animation_player == null:
-		return
-	if p.visual_state == state_name:
-		return
-	if not p.animation_player.has_animation(state_name):
-		return
-	p.visual_state = state_name
-	p.animation_player.play(state_name, 0.15)
-
-func _play_glb_action(p: PlayerState, state_name: String, duration: float) -> void:
-	if not p.uses_glb:
-		return
-	_set_glb_visual_state(p, state_name)
-	p.action_timer = duration
-
-func _instantiate_glb(path: String):
-	var packed: PackedScene = null
-	if glb_scene_cache.has(path):
-		packed = glb_scene_cache[path]
-	else:
-		if not ResourceLoader.exists(path, "PackedScene"):
-			glb_scene_cache[path] = null
-			return null
-		var res := ResourceLoader.load(path, "PackedScene")
-		packed = res as PackedScene
-		glb_scene_cache[path] = packed
-	if packed == null:
-		return null
-	var instance := packed.instantiate()
-	if instance is Node3D:
-		return instance
-	var wrapper := Node3D.new()
-	wrapper.add_child(instance)
-	return wrapper
-
-func _find_animation_player(node: Node) -> AnimationPlayer:
-	if node is AnimationPlayer:
-		return node
-	for child in node.get_children():
-		var found := _find_animation_player(child)
-		if found != null:
-			return found
-	return null
-
-func _place_glb_model(model: Node3D) -> void:
-	model.scale = Vector3.ONE
-	model.position = Vector3.ZERO
-	var bounds := _node_local_bounds(model)
-	if bounds.size.length() <= 0.001 or bounds.size.y <= 0.001:
-		model.scale = Vector3.ONE * GameConfig.PLAYER_GLB_SCALE
-		model.position = Vector3(0.0, GameConfig.PLAYER_GLB_Y_OFFSET, 0.0)
-		push_warning("Player GLB bounds unavailable; using fixed imported-model scale.")
-		return
-	var scale := GameConfig.PLAYER_GLB_SCALE
-	var center := bounds.position + bounds.size * 0.5
-	model.scale = Vector3.ONE * scale
-	model.position = Vector3(-center.x * scale, GameConfig.PLAYER_GLB_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
-
-func _apply_team_tint(model: Node3D, team_index: int) -> void:
-	var tint := Color(0.95, 0.10, 0.08) if team_index == 0 else Color(0.08, 0.36, 1.0)
-	_apply_team_tint_recursive(model, tint)
-
-func _apply_team_tint_recursive(node: Node, tint: Color) -> void:
-	if node is MeshInstance3D and _is_uniform_mesh(node.name):
-		var mesh_instance := node as MeshInstance3D
-		var mesh := mesh_instance.mesh
-		if mesh != null:
-			for surface_idx in mesh.get_surface_count():
-				var base_mat := mesh_instance.get_surface_override_material(surface_idx)
-				if base_mat == null:
-					base_mat = mesh.surface_get_material(surface_idx)
-				var mat: Material = base_mat.duplicate() if base_mat != null else StandardMaterial3D.new()
-				if mat is BaseMaterial3D:
-					var base := mat as BaseMaterial3D
-					base.albedo_color = base.albedo_color.lerp(tint, 0.62)
-				mesh_instance.set_surface_override_material(surface_idx, mat)
-	for child: Node in node.get_children():
-		_apply_team_tint_recursive(child, tint)
-
-func _is_uniform_mesh(node_name: StringName) -> bool:
-	var n := String(node_name).to_lower()
-	return n.contains("shirt") or n.contains("short") or n.contains("sock")
-
-func _node_local_bounds(root: Node3D) -> AABB:
-	var state := [false, Vector3.ZERO, Vector3.ZERO]
-	for child: Node in root.get_children():
-		_accumulate_local_bounds(child, Transform3D.IDENTITY, state)
-	if not state[0]:
-		return AABB()
-	return AABB(state[1], state[2] - state[1])
-
-func _accumulate_local_bounds(node: Node, parent_xform: Transform3D, state: Array) -> void:
-	var current := parent_xform
-	if node is Node3D:
-		current = parent_xform * (node as Node3D).transform
-	if node is MeshInstance3D:
-		var mesh_instance := node as MeshInstance3D
-		var aabb: AABB = mesh_instance.get_aabb()
-		for i in 8:
-			var local_point: Vector3 = current * _aabb_corner(aabb, i)
-			if not state[0]:
-				state[1] = local_point
-				state[2] = local_point
-				state[0] = true
-			else:
-				var min_v: Vector3 = state[1]
-				var max_v: Vector3 = state[2]
-				state[1] = Vector3(minf(min_v.x, local_point.x), minf(min_v.y, local_point.y), minf(min_v.z, local_point.z))
-				state[2] = Vector3(maxf(max_v.x, local_point.x), maxf(max_v.y, local_point.y), maxf(max_v.z, local_point.z))
-	for child: Node in node.get_children():
-		_accumulate_local_bounds(child, current, state)
-
-func _aabb_corner(aabb: AABB, index: int) -> Vector3:
-	return aabb.position + Vector3(
-		aabb.size.x if index & 1 else 0.0,
-		aabb.size.y if index & 2 else 0.0,
-		aabb.size.z if index & 4 else 0.0
-	)
 
 func _create_ball() -> void:
 	var root := Node3D.new()
 	root.name = "Ball3D"
-	var mesh := _mesh("BallMesh", SphereMesh.new(), materials.ball, Vector3.ZERO)
+	var mesh := material_factory._mesh("BallMesh", SphereMesh.new(), materials.ball, Vector3.ZERO)
 	mesh.mesh.radius = 0.24
 	mesh.mesh.height = 0.48
 	root.add_child(mesh)
@@ -1242,7 +594,7 @@ func _create_ball() -> void:
 
 func _create_ball_trail() -> void:
 	for i in 10:
-		var trail := _mesh("BallTrail%d" % i, SphereMesh.new(), materials.trail, Vector3.ZERO)
+		var trail := material_factory._mesh("BallTrail%d" % i, SphereMesh.new(), materials.trail, Vector3.ZERO)
 		trail.mesh.radius = 0.12 - float(i) * 0.007
 		trail.mesh.height = trail.mesh.radius * 2.0
 		trail.visible = false
@@ -1587,7 +939,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
 	_play_kick()
-	_play_glb_action(p, "kick", 0.7)
+	p.play_action("kick", 0.7)
 
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
 	var p := team[player_idx]
@@ -1597,14 +949,14 @@ func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int)
 	if Vector2(p.x - ball.x, p.y - ball.y).length() < capture_radius:
 		if ball.owner_team == -1 and p.stun_timer <= 0.0:
 			_set_owner(team_idx, player_idx)
-			_play_glb_action(p, "receive", 0.45)
+			p.play_action("receive", 0.45)
 		elif ball.owner_team != -1 and _owner_side() != p.side and p.stun_timer <= 0.0:
 			var old := _owner_player()
 			if old != null and old.role != GameConfig.PlayerRole.GOALKEEPER:
 				old.stun_timer = 0.45
 				old.kick_power = 0.0
 				_set_owner(team_idx, player_idx)
-				_play_glb_action(p, "tackle", 0.55)
+				p.play_action("tackle", 0.55)
 
 func _move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
@@ -1674,9 +1026,9 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
 		if p.role == GameConfig.PlayerRole.GOALKEEPER:
-			_set_glb_visual_state(p, "run" if p.is_moving else "gk_idle")
+			p.set_visual_state("run" if p.is_moving else "gk_idle")
 		else:
-			_set_glb_visual_state(p, "run" if p.is_moving else "idle")
+			p.set_visual_state("run" if p.is_moving else "idle")
 	var is_selected := (p.team_index == 0 and team_red.find(p) == selected_index[0]) or (p.team_index == 1 and num_players == 2 and team_blue.find(p) == selected_index[1])
 	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
 	var power_ring := p.node.get_node("PowerRing") as Node3D
@@ -1741,7 +1093,7 @@ func _spawn_confetti() -> void:
 			mat = materials.confetti_red
 		elif i % 3 == 1:
 			mat = materials.confetti_blue
-		var piece := _mesh("Confetti", BoxMesh.new(), mat, GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
+		var piece := material_factory._mesh("Confetti", BoxMesh.new(), mat, GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
 		piece.mesh.size = Vector3(0.10, 0.035, 0.16)
 		vfx_root.add_child(piece)
 		var velocity := Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
@@ -1780,63 +1132,3 @@ func _owner_player() -> PlayerState:
 func _owner_side() -> int:
 	var owner := _owner_player()
 	return owner.side if owner != null else 0
-
-func _mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
-	var node := MeshInstance3D.new()
-	node.name = node_name
-	node.mesh = mesh
-	node.material_override = mat
-	node.position = pos
-	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-	return node
-
-func _material(color: Color, roughness := 0.65, metallic := 0.0, texture: Texture2D = null) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = roughness
-	mat.metallic = metallic
-	if texture != null:
-		mat.albedo_texture = texture
-		mat.uv1_scale = Vector3(8.0, 8.0, 1.0)
-	if color.a < 1.0:
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.no_depth_test = false
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return mat
-
-func _emission_material(color: Color, energy := 1.0) -> StandardMaterial3D:
-	var mat := _material(color, 0.35)
-	mat.emission_enabled = true
-	mat.emission = color
-	mat.emission_energy_multiplier = energy
-	return mat
-
-func _checker_texture(a: Color, b: Color, size: int, cells: int) -> Texture2D:
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	for y in size:
-		for x in size:
-			var use_a := ((x / cells) + (y / cells)) % 2 == 0
-			img.set_pixel(x, y, a if use_a else b)
-	return ImageTexture.create_from_image(img)
-
-func _noise_texture(base: Color, variation: float, size := 128) -> Texture2D:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 0x1EE7
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	for y in size:
-		for x in size:
-			var f := 1.0 + rng.randf_range(-variation, variation)
-			img.set_pixel(x, y, Color(base.r * f, base.g * f, base.b * f))
-	img.generate_mipmaps()
-	return ImageTexture.create_from_image(img)
-
-func _net_texture(size := 64, step := 8) -> Texture2D:
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	img.fill(Color(1.0, 1.0, 1.0, 0.0))
-	for y in size:
-		for x in size:
-			if x % step == 0 or y % step == 0:
-				img.set_pixel(x, y, Color(0.92, 0.95, 1.0, 0.8))
-	img.generate_mipmaps()
-	return ImageTexture.create_from_image(img)
-
