@@ -78,8 +78,11 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	(p.node.get_node("ArmR") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
-	var is_selected := (p.team_index == 0 and sim.team_red.find(p) == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and sim.team_blue.find(p) == sim.selected_index[1])
-	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
+	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
+	var is_selected := (p.team_index == 0 and player_index == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.selected_index[1])
+	var is_candidate := (p.team_index == 0 and player_index == sim.switch_candidate_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.switch_candidate_index[1])
+	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
+	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
@@ -100,8 +103,11 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 			p.set_visual_state("run" if p.is_moving else "gk_idle")
 		else:
 			p.set_visual_state("run" if p.is_moving else "idle")
-	var is_selected := (p.team_index == 0 and sim.team_red.find(p) == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and sim.team_blue.find(p) == sim.selected_index[1])
-	(p.node.get_node("SelectedRing") as Node3D).visible = owns_ball or is_selected
+	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
+	var is_selected := (p.team_index == 0 and player_index == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.selected_index[1])
+	var is_candidate := (p.team_index == 0 and player_index == sim.switch_candidate_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.switch_candidate_index[1])
+	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
+	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)

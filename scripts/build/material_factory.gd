@@ -38,6 +38,7 @@ func _build_materials() -> void:
 	materials.boots = _material(Color(0.03, 0.03, 0.035), 0.45)
 	materials.ball = _material(Color.WHITE, 0.42, 0.0, _checker_texture(Color(0.96, 0.96, 0.92), Color(0.02, 0.02, 0.025), 128, 24))
 	materials.selection = _emission_material(Color(1.0, 0.92, 0.08), 1.8)
+	materials.selection_next = _emission_material(Color(0.25, 1.0, 0.72), 1.2)
 	materials.power = _emission_material(Color(0.1, 0.65, 1.0), 1.7)
 	materials.trail = _material(Color(1.0, 0.86, 0.25, 0.36), 0.35)
 	materials.confetti_red = _emission_material(Color(1.0, 0.08, 0.04), 1.1)

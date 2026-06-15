@@ -43,6 +43,12 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	marker.mesh.height = 0.025
 	marker.visible = false
 	root.add_child(marker)
+	var next_marker := mf._mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
+	next_marker.mesh.top_radius = 0.48
+	next_marker.mesh.bottom_radius = 0.48
+	next_marker.mesh.height = 0.025
+	next_marker.visible = false
+	root.add_child(next_marker)
 	var power := mf._mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
 	power.mesh.top_radius = 0.64
 	power.mesh.bottom_radius = 0.64
@@ -62,6 +68,12 @@ func _create_glb_player_visual(state: PlayerState):
 	marker.mesh.height = 0.025
 	marker.visible = false
 	root.add_child(marker)
+	var next_marker := mf._mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
+	next_marker.mesh.top_radius = 0.48
+	next_marker.mesh.bottom_radius = 0.48
+	next_marker.mesh.height = 0.025
+	next_marker.visible = false
+	root.add_child(next_marker)
 	var power := mf._mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
 	power.mesh.top_radius = 0.64
 	power.mesh.bottom_radius = 0.64

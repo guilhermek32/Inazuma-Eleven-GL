@@ -20,6 +20,7 @@ var score_right := 0
 var kickoff_timer := 2.0
 var inputs := [InputSnapshot.new(), InputSnapshot.new()]
 var selected_index: Array[int] = [-1, -1]
+var switch_candidate_index: Array[int] = [-1, -1]
 
 ## Advances one frame: kickoff timer, ball physics + goal detection, then each
 ## team's update. Returns the scoring side (-1 left, +1 right, 0 none).
@@ -89,6 +90,8 @@ func _reset_game(kickoff_side: int) -> void:
 	# or on whichever red player is nearest the ball if red is not kicking off.
 	selected_index[0] = _nearest_user_player(team_red, 0)
 	selected_index[1] = -1
+	switch_candidate_index[0] = -1
+	switch_candidate_index[1] = -1
 
 func _reset_players(team: Array[PlayerState]) -> void:
 	for p in team:
@@ -176,24 +179,29 @@ func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_
 			_try_capture_ball(team, team_idx, i)
 
 func _handle_user_selection(team: Array[PlayerState], team_idx: int, snap: InputSnapshot) -> void:
-	# Auto-switch to whoever just captured the ball for this team.
+	# In possession: control is locked to the ball carrier (FIFA-style). No switching.
 	if ball.owner_team == team_idx:
-		var cur := selected_index[team_idx]
-		if cur < 0 or ball.owner_index != cur:
-			selected_index[team_idx] = ball.owner_index
-	# Manual switch: pick the nearest non-selected outfield player.
+		selected_index[team_idx] = ball.owner_index
+		switch_candidate_index[team_idx] = -1
+		return
+	# Not in possession: on Q/L1 press, switch to the pre-computed candidate.
 	if snap != null and snap.switch_pressed:
-		var cur := selected_index[team_idx]
-		var best := cur
-		var best_dist := INF
-		for i in team.size():
-			if i == cur or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
-				continue
-			var d := Vector2(team[i].x - ball.x, team[i].y - ball.y).length()
-			if d < best_dist:
-				best_dist = d
-				best = i
-		selected_index[team_idx] = best
+		var candidate := switch_candidate_index[team_idx]
+		if candidate >= 0:
+			selected_index[team_idx] = candidate
+	# Every frame: recompute the switch candidate = nearest outfield player that
+	# is NOT the currently selected one.
+	var cur := selected_index[team_idx]
+	var best := -1
+	var best_dist := INF
+	for i in team.size():
+		if i == cur or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
+			continue
+		var d := Vector2(team[i].x - ball.x, team[i].y - ball.y).length()
+		if d < best_dist:
+			best_dist = d
+			best = i
+	switch_candidate_index[team_idx] = best
 
 func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
 	var best := -1

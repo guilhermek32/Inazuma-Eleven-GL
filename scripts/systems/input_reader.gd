@@ -47,7 +47,9 @@ func _read_gamepad_input(snap: InputSnapshot, device: int, allow: bool) -> void:
 	# Shoot is the right shoulder button: R1 on PlayStation, RB on Xbox (SDL-abstracted).
 	snap.shoot_held = allow and Input.is_joy_button_pressed(device, JOY_BUTTON_RIGHT_SHOULDER)
 	snap.pass_pressed = allow and Input.is_joy_button_pressed(device, JOY_BUTTON_A) and not snap.shoot_held
-	snap.switch_pressed = allow and Input.is_joy_button_pressed(device, JOY_BUTTON_LEFT_SHOULDER) and not snap.shoot_held
+	var switch_now := allow and Input.is_joy_button_pressed(device, JOY_BUTTON_LEFT_SHOULDER)
+	snap.switch_pressed = switch_now and not snap.switch_held
+	snap.switch_held = switch_now
 	# Right stick aims as a direction relative to the player; world point computed at kick time.
 	var look := Vector2(Input.get_joy_axis(device, JOY_AXIS_RIGHT_X), -Input.get_joy_axis(device, JOY_AXIS_RIGHT_Y))
 	snap.aim_absolute = false
