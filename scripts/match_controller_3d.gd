@@ -20,9 +20,10 @@ var material_factory: MaterialFactory
 var pitch_builder: PitchBuilder
 var stadium_builder: StadiumBuilder
 var player_factory: PlayerFactory
-var ui_layer: CanvasLayer
-var score_label: Label
-var timer_label: Label
+var hud: MatchHud
+var audio: AudioManager
+var settings: SettingsStore
+var menu: MenuManager
 var team_red: Array[PlayerState] = []
 var team_blue: Array[PlayerState] = []
 var ball := BallState.new()
@@ -46,26 +47,8 @@ var current_half := 1
 var halftime_pause := 0.0
 
 # Settings (defaults; overridden by _load_settings)
-var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard
-var ai_speed_mult := 1.0
-var ai_decision_mult := 1.0
-var half_length := 120.0       # seconds per half
-var fullscreen := false
-var vol_master := 0.9
-var vol_music := 0.7
-var vol_sfx := 1.0
 
 # Menu / audio nodes
-var menu_layer: CanvasLayer
-var menu_panels := {}
-var play_2p_button: Button
-var play_2p_hint: Label
-var fulltime_label: Label
-var music_player: AudioStreamPlayer
-var sfx_kick: AudioStreamPlayer
-var sfx_whistle: AudioStreamPlayer
-var bus_music := -1
-var bus_sfx := -1
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
@@ -89,16 +72,26 @@ func _ready() -> void:
 	pitch_builder._build_pitch()
 	pitch_builder._build_goals()
 	stadium_builder._build_stadium()
-	_build_ui()
-	_setup_input_actions()
+	hud = MatchHud.new()
+	add_child(hud)
+	hud._build_ui()
+	settings = SettingsStore.new()
+	settings._setup_input_actions()
 	player_factory = PlayerFactory.new()
 	player_factory.mf = material_factory
 	_create_teams()
 	_create_ball()
 	_create_ball_trail()
-	_build_audio()
-	_load_settings()
-	_build_menus()
+	audio = AudioManager.new()
+	add_child(audio)
+	audio._build_audio()
+	settings.audio = audio
+	settings._load_settings()
+	menu = MenuManager.new()
+	add_child(menu)
+	menu.controller = self
+	menu.settings = settings
+	menu._build_menus()
 	_reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
@@ -119,13 +112,7 @@ func _process(delta: float) -> void:
 			_update_match_clock(delta)
 		_update_visuals(delta)
 	_update_confetti(delta)
-	_update_scoreboard()
-
-func _exit_tree() -> void:
-	for player in [music_player, sfx_kick, sfx_whistle]:
-		if player != null:
-			player.stop()
-			player.stream = null
+	hud.update(score_left, score_right, game_state, kickoff_timer, settings.half_length, match_time, current_half)
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -143,20 +130,9 @@ func _set_game_state(next: int) -> void:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	game_state = next
 	_set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
-	for key in menu_panels:
-		(menu_panels[key] as Control).visible = false
-	match next:
-		GameConfig.GameState.MENU:
-			_refresh_two_player_availability()
-			menu_panels.main.visible = true
-		GameConfig.GameState.HOWTO:
-			menu_panels.howto.visible = true
-		GameConfig.GameState.SETTINGS:
-			menu_panels.settings.visible = true
-		GameConfig.GameState.PAUSED:
-			menu_panels.pause.visible = true
-		GameConfig.GameState.FULLTIME:
-			menu_panels.fulltime.visible = true
+	if next == GameConfig.GameState.MENU:
+		menu._refresh_two_player_availability()
+	menu.show_for_state(next)
 
 func _start_match() -> void:
 	score_left = 0
@@ -167,30 +143,29 @@ func _start_match() -> void:
 	_set_default_ends()
 	_reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
-	_play_whistle()
+	audio._play_whistle()
 
 func _update_match_clock(delta: float) -> void:
 	match_time += delta
-	if match_time >= half_length:
+	if match_time >= settings.half_length:
 		if current_half == 1:
 			current_half = 2
 			match_time = 0.0
 			halftime_pause = 2.0
 			_switch_ends()
 			_reset_game(1)
-			_play_whistle()
+			audio._play_whistle()
 		else:
 			_end_match()
 
 func _end_match() -> void:
-	_play_whistle()
+	audio._play_whistle()
 	var result := "DRAW"
 	if score_left > score_right:
 		result = "RED WINS"
 	elif score_right > score_left:
 		result = "BLUE WINS"
-	if fulltime_label != null:
-		fulltime_label.text = "FULL TIME\n%d - %d\n%s" % [score_left, score_right, result]
+	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [score_left, score_right, result])
 	_set_game_state(GameConfig.GameState.FULLTIME)
 
 func _switch_ends() -> void:
@@ -227,15 +202,7 @@ func _set_glb_animations_paused(paused: bool) -> void:
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 	if game_state == GameConfig.GameState.MENU:
-		_refresh_two_player_availability()
-
-func _refresh_two_player_availability() -> void:
-	if play_2p_button == null:
-		return
-	var pads := Input.get_connected_joypads().size()
-	play_2p_button.disabled = pads < 1
-	if play_2p_hint != null:
-		play_2p_hint.text = "" if pads >= 1 else "Connect 1 controller for 2-player"
+		menu._refresh_two_player_availability()
 
 func _build_scene_roots() -> void:
 	pitch_root = _new_root("Pitch")
@@ -252,295 +219,15 @@ func _new_root(root_name: String) -> Node3D:
 	add_child(node)
 	return node
 
-func _build_ui() -> void:
-	ui_layer = CanvasLayer.new()
-	ui_layer.name = "ScoreboardUI"
-	add_child(ui_layer)
-	score_label = Label.new()
-	score_label.name = "ScoreLabel"
-	score_label.text = "0 - 0"
-	score_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	score_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	score_label.position.y = 20.0
-	score_label.add_theme_font_size_override("font_size", 56)
-	score_label.add_theme_color_override("font_color", Color.WHITE)
-	ui_layer.add_child(score_label)
-	timer_label = Label.new()
-	timer_label.name = "TimerLabel"
-	timer_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	timer_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	timer_label.position.y = 88.0
-	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	timer_label.add_theme_font_size_override("font_size", 26)
-	timer_label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.25))
-	ui_layer.add_child(timer_label)
-
 # ---------------------------------------------------------------------------
 # Audio
 # ---------------------------------------------------------------------------
-func _build_audio() -> void:
-	if DisplayServer.get_name() == "headless":
-		return
-	bus_music = _add_audio_bus("Music")
-	bus_sfx = _add_audio_bus("SFX")
-	music_player = _make_stream_player("MusicPlayer", "res://assets/sound/background-sound.mp3", "Music", true)
-	sfx_kick = _make_stream_player("KickSfx", "res://assets/sound/kick.mp3", "SFX", false)
-	sfx_whistle = _make_stream_player("WhistleSfx", "res://assets/sound/referee-start.mp3", "SFX", false)
-	if music_player != null:
-		music_player.play()
-
-func _add_audio_bus(bus_name: String) -> int:
-	var idx := AudioServer.bus_count
-	AudioServer.add_bus(idx)
-	AudioServer.set_bus_name(idx, bus_name)
-	AudioServer.set_bus_send(idx, "Master")
-	return idx
-
-func _make_stream_player(node_name: String, path: String, bus: String, loop: bool) -> AudioStreamPlayer:
-	if not ResourceLoader.exists(path):
-		push_warning("Audio asset missing: %s" % path)
-		return null
-	var player := AudioStreamPlayer.new()
-	player.name = node_name
-	var stream := load(path)
-	if stream is AudioStreamMP3:
-		stream.loop = loop
-	player.stream = stream
-	player.bus = bus
-	add_child(player)
-	return player
-
-func _play_kick() -> void:
-	if sfx_kick != null:
-		sfx_kick.play()
-
-func _play_whistle() -> void:
-	if sfx_whistle != null:
-		sfx_whistle.play()
-
-func _apply_volumes() -> void:
-	AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Master"), linear_to_db(vol_master))
-	if bus_music >= 0:
-		AudioServer.set_bus_volume_db(bus_music, linear_to_db(vol_music))
-	if bus_sfx >= 0:
-		AudioServer.set_bus_volume_db(bus_sfx, linear_to_db(vol_sfx))
-
 # ---------------------------------------------------------------------------
 # Menus
 # ---------------------------------------------------------------------------
-func _build_menus() -> void:
-	menu_layer = CanvasLayer.new()
-	menu_layer.name = "MenuUI"
-	menu_layer.layer = 2
-	add_child(menu_layer)
-	_build_main_menu()
-	_build_howto_panel()
-	_build_settings_panel()
-	_build_pause_panel()
-	_build_fulltime_panel()
-
-func _make_panel(panel_name: String, dim := true) -> Control:
-	var panel := Control.new()
-	panel.name = panel_name
-	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	menu_layer.add_child(panel)
-	if dim:
-		var bg := ColorRect.new()
-		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-		bg.color = Color(0.02, 0.03, 0.06, 0.82)
-		panel.add_child(bg)
-	menu_panels[panel_name] = panel
-	return panel
-
-func _make_vbox(parent: Control) -> VBoxContainer:
-	var vb := VBoxContainer.new()
-	vb.set_anchors_preset(Control.PRESET_CENTER)
-	vb.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	vb.grow_vertical = Control.GROW_DIRECTION_BOTH
-	vb.add_theme_constant_override("separation", 14)
-	parent.add_child(vb)
-	return vb
-
-func _make_title(parent: Control, text: String, size := 64) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.add_theme_font_size_override("font_size", size)
-	label.add_theme_color_override("font_color", Color(1.0, 0.93, 0.55))
-	parent.add_child(label)
-	return label
-
-func _make_button(parent: Control, text: String, handler: Callable) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.custom_minimum_size = Vector2(320, 52)
-	button.add_theme_font_size_override("font_size", 26)
-	button.pressed.connect(handler)
-	parent.add_child(button)
-	return button
-
-func _build_main_menu() -> void:
-	var panel := _make_panel("main", false)
-	var bg := ColorRect.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(0.03, 0.05, 0.10, 1.0)
-	panel.add_child(bg)
-	var vb := _make_vbox(panel)
-	_make_title(vb, "INAZUMA ELEVEN", 72)
-	_make_title(vb, "GL", 32).add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	_make_button(vb, "Play - 1 Player", func() -> void: num_players = 1; _start_match())
-	play_2p_button = _make_button(vb, "Play - 2 Players", func() -> void: num_players = 2; _start_match())
-	play_2p_hint = Label.new()
-	play_2p_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	play_2p_hint.add_theme_font_size_override("font_size", 16)
-	play_2p_hint.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
-	vb.add_child(play_2p_hint)
-	_make_button(vb, "How to Play", func() -> void: _set_game_state(GameConfig.GameState.HOWTO))
-	_make_button(vb, "Settings", func() -> void: _set_game_state(GameConfig.GameState.SETTINGS))
-	_make_button(vb, "Quit", func() -> void: get_tree().quit())
-
-func _build_howto_panel() -> void:
-	var panel := _make_panel("howto")
-	var vb := _make_vbox(panel)
-	_make_title(vb, "How to Play")
-	var text := Label.new()
-	text.add_theme_font_size_override("font_size", 22)
-	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (keyboard + mouse vs controller)\nP1 Move: W A S D    Aim: Mouse    Shoot: SPACE\nP2 Move: Left stick    Aim: Right stick\nP2 Shoot: R1 / RB  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
-	vb.add_child(text)
-	_make_button(vb, "Back", func() -> void: _set_game_state(prev_menu_state))
-
-func _build_pause_panel() -> void:
-	var panel := _make_panel("pause")
-	var vb := _make_vbox(panel)
-	_make_title(vb, "Paused")
-	_make_button(vb, "Resume", func() -> void: _set_game_state(GameConfig.GameState.PLAYING))
-	_make_button(vb, "Restart Match", func() -> void: _start_match())
-	_make_button(vb, "Settings", func() -> void: _set_game_state(GameConfig.GameState.SETTINGS))
-	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameConfig.GameState.MENU))
-
-func _build_fulltime_panel() -> void:
-	var panel := _make_panel("fulltime")
-	var vb := _make_vbox(panel)
-	fulltime_label = _make_title(vb, "FULL TIME")
-	_make_button(vb, "Rematch", func() -> void: _start_match())
-	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameConfig.GameState.MENU))
-
-func _build_settings_panel() -> void:
-	var panel := _make_panel("settings")
-	var vb := _make_vbox(panel)
-	_make_title(vb, "Settings")
-
-	var difficulty_opt := OptionButton.new()
-	difficulty_opt.add_item("Easy")
-	difficulty_opt.add_item("Normal")
-	difficulty_opt.add_item("Hard")
-	difficulty_opt.selected = difficulty
-	difficulty_opt.item_selected.connect(func(i: int) -> void: difficulty = i; _apply_settings(); _save_settings())
-	_settings_row(vb, "Difficulty", difficulty_opt)
-
-	var length_opt := OptionButton.new()
-	length_opt.add_item("2 min halves")
-	length_opt.add_item("5 min halves")
-	length_opt.add_item("10 min halves")
-	length_opt.selected = GameConfig.MATCH_LENGTHS.find(half_length) if GameConfig.MATCH_LENGTHS.has(half_length) else 0
-	length_opt.item_selected.connect(func(i: int) -> void: half_length = GameConfig.MATCH_LENGTHS[i]; _save_settings())
-	_settings_row(vb, "Match Length", length_opt)
-
-	var fs_check := CheckButton.new()
-	fs_check.button_pressed = fullscreen
-	fs_check.toggled.connect(func(on: bool) -> void: fullscreen = on; _apply_settings(); _save_settings())
-	_settings_row(vb, "Fullscreen", fs_check)
-
-	_settings_row(vb, "Master Volume", _make_volume_slider(func() -> float: return vol_master, func(v: float) -> void: vol_master = v))
-	_settings_row(vb, "Music Volume", _make_volume_slider(func() -> float: return vol_music, func(v: float) -> void: vol_music = v))
-	_settings_row(vb, "SFX Volume", _make_volume_slider(func() -> float: return vol_sfx, func(v: float) -> void: vol_sfx = v))
-
-	_make_button(vb, "Back", func() -> void: _set_game_state(prev_menu_state))
-
-func _settings_row(vb: VBoxContainer, label_text: String, control: Control) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 18)
-	var label := Label.new()
-	label.text = label_text
-	label.custom_minimum_size = Vector2(200, 0)
-	label.add_theme_font_size_override("font_size", 22)
-	row.add_child(label)
-	control.custom_minimum_size = Vector2(220, 36)
-	row.add_child(control)
-	vb.add_child(row)
-
-func _make_volume_slider(getter: Callable, setter: Callable) -> HSlider:
-	var slider := HSlider.new()
-	slider.min_value = 0.0
-	slider.max_value = 1.0
-	slider.step = 0.05
-	slider.value = getter.call()
-	slider.value_changed.connect(func(v: float) -> void: setter.call(v); _apply_volumes(); _save_settings())
-	return slider
-
 # ---------------------------------------------------------------------------
 # Settings persistence
 # ---------------------------------------------------------------------------
-func _apply_settings() -> void:
-	match difficulty:
-		0: ai_speed_mult = 0.85; ai_decision_mult = 0.6
-		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0
-		2: ai_speed_mult = 1.15; ai_decision_mult = 1.5
-	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
-	DisplayServer.window_set_mode(mode)
-	_apply_volumes()
-
-func _load_settings() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load(GameConfig.SETTINGS_PATH) == OK:
-		difficulty = cfg.get_value("game", "difficulty", difficulty)
-		half_length = cfg.get_value("game", "half_length", half_length)
-		fullscreen = cfg.get_value("video", "fullscreen", fullscreen)
-		vol_master = cfg.get_value("audio", "master", vol_master)
-		vol_music = cfg.get_value("audio", "music", vol_music)
-		vol_sfx = cfg.get_value("audio", "sfx", vol_sfx)
-	_apply_settings()
-
-func _save_settings() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("game", "difficulty", difficulty)
-	cfg.set_value("game", "half_length", half_length)
-	cfg.set_value("video", "fullscreen", fullscreen)
-	cfg.set_value("audio", "master", vol_master)
-	cfg.set_value("audio", "music", vol_music)
-	cfg.set_value("audio", "sfx", vol_sfx)
-	cfg.save(GameConfig.SETTINGS_PATH)
-
-func _setup_input_actions() -> void:
-	_add_key_action("move_up", KEY_W)
-	_add_key_action("move_down", KEY_S)
-	_add_key_action("move_left", KEY_A)
-	_add_key_action("move_right", KEY_D)
-	_add_key_action("shoot", KEY_SPACE)
-	_add_joy_button_action("ui_cancel", JOY_BUTTON_START)
-
-func _add_key_action(action: StringName, keycode: Key) -> void:
-	if not InputMap.has_action(action):
-		InputMap.add_action(action)
-	var event := InputEventKey.new()
-	event.physical_keycode = keycode
-	for existing in InputMap.action_get_events(action):
-		if existing is InputEventKey and existing.physical_keycode == keycode:
-			return
-	InputMap.action_add_event(action, event)
-
-func _add_joy_button_action(action: StringName, button_index: JoyButton) -> void:
-	if not InputMap.has_action(action):
-		InputMap.add_action(action)
-	var event := InputEventJoypadButton.new()
-	event.button_index = button_index
-	for existing in InputMap.action_get_events(action):
-		if existing is InputEventJoypadButton and existing.button_index == button_index:
-			return
-	InputMap.action_add_event(action, event)
-
 func _create_teams() -> void:
 	team_red.clear()
 	team_blue.clear()
@@ -808,7 +495,7 @@ func _aim_target(snap: InputSnapshot, p: PlayerState) -> Vector2:
 func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float) -> void:
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
-	var current_speed := p.speed * ai_speed_mult * (0.3 if p.stun_timer > 0.0 else 1.0)
+	var current_speed := p.speed * settings.ai_speed_mult * (0.3 if p.stun_timer > 0.0 else 1.0)
 	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		if ball.owner_team == team_idx and ball.owner_index == player_idx:
 			p.hold_timer += delta
@@ -875,11 +562,11 @@ func _ball_in_own_third(side: int) -> bool:
 func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
 	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
-	if dist_to_goal < 0.40 and randf() < 2.4 * ai_decision_mult * delta:
+	if dist_to_goal < 0.40 and randf() < 2.4 * settings.ai_decision_mult * delta:
 		_kick_from_player(p, Vector2(target_goal_x, 0.0), 0.75, false)
 		ball.is_super_shot = true
 		return
-	if randf() < 1.8 * ai_decision_mult * delta:
+	if randf() < 1.8 * settings.ai_decision_mult * delta:
 		var target := _best_pass_target(p, team, opponents, target_goal_x)
 		if target != null:
 			_kick_from_player(p, Vector2(target.x, target.y), 0.35, false)
@@ -938,7 +625,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	_clear_owner()
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
-	_play_kick()
+	audio._play_kick()
 	p.play_action("kick", 0.7)
 
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
@@ -1069,22 +756,10 @@ func _update_camera(delta: float) -> void:
 	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(ball.x, ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)
 
-func _update_scoreboard() -> void:
-	if score_label != null:
-		score_label.text = "%d - %d" % [score_left, score_right]
-	if timer_label != null:
-		if game_state != GameConfig.GameState.PLAYING:
-			timer_label.text = ""
-		elif kickoff_timer > 0.0:
-			timer_label.text = "Kickoff %.1f" % kickoff_timer
-		else:
-			var remaining := int(ceil(maxf(0.0, half_length - match_time)))
-			timer_label.text = "%d:%02d  -  %s Half" % [remaining / 60, remaining % 60, "1st" if current_half == 1 else "2nd"]
-
 func _trigger_goal(_scorer: int) -> void:
 	celebration_timer = 1.5
 	_spawn_confetti()
-	_play_whistle()
+	audio._play_whistle()
 
 func _spawn_confetti() -> void:
 	for i in 72:
