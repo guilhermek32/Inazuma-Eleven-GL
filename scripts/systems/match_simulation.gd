@@ -60,6 +60,19 @@ func _create_teams() -> void:
 	_add_player(team_blue, 0.10, 0.00, s, 1, GameConfig.PlayerRole.ATTACKER)
 	_add_player(team_blue, 0.10, 0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
 	_add_player(team_blue, 0.10, -0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
+	# Classic 4-3-3 jersey numbering: centre attacker wears 10 (the star number).
+	# GK=1, DEF=2-5, MID=6-8, ATT-centre=10, ATT-right=9, ATT-left=11.
+	var jersey := [1, 2, 3, 4, 5, 6, 7, 8, 10, 9, 11]
+	for i in team_red.size():
+		team_red[i].jersey_number = jersey[i]
+		var lbl := team_red[i].node.get_node_or_null("JerseyNumber") as Label3D
+		if lbl:
+			lbl.text = str(jersey[i])
+	for i in team_blue.size():
+		team_blue[i].jersey_number = jersey[i]
+		var lbl := team_blue[i].node.get_node_or_null("JerseyNumber") as Label3D
+		if lbl:
+			lbl.text = str(jersey[i])
 
 func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, side: int, role: int) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)

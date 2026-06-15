@@ -55,6 +55,7 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	power.mesh.height = 0.025
 	power.visible = false
 	root.add_child(power)
+	root.add_child(_jersey_label(1.85))
 	return root
 
 func _create_glb_player_visual(state: PlayerState):
@@ -104,6 +105,7 @@ func _create_glb_player_visual(state: PlayerState):
 		push_warning("Player GLB animations unavailable; using static mesh.")
 	state.visual_model = model
 	state.set_visual_state("gk_idle" if state.role == GameConfig.PlayerRole.GOALKEEPER else "idle")
+	root.add_child(_jersey_label(2.3))
 	return root
 
 # Builds the shared library of named clips extracted from the animation-only action GLBs.
@@ -260,3 +262,16 @@ func _aabb_corner(aabb: AABB, index: int) -> Vector3:
 		aabb.size.y if index & 2 else 0.0,
 		aabb.size.z if index & 4 else 0.0
 	)
+
+func _jersey_label(height: float) -> Label3D:
+	var label := Label3D.new()
+	label.name = "JerseyNumber"
+	label.text = ""
+	label.font_size = 64
+	label.pixel_size = 0.004
+	label.modulate = Color(1.0, 1.0, 1.0, 0.92)
+	label.outline_size = 7
+	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.88)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.position = Vector3(0.0, height, 0.0)
+	return label

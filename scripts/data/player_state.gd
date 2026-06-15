@@ -26,6 +26,7 @@ var visual_model: Node3D
 var animation_player: AnimationPlayer
 var visual_state := ""
 var action_timer := 0.0
+var jersey_number := 0
 
 func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> void:
 	x = p_x
