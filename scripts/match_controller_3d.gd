@@ -1,109 +1,7 @@
 extends Node3D
 
-enum PlayerRole { GOALKEEPER, DEFENDER, MIDFIELDER, ATTACKER }
 
-const FIELD_HALF_WIDTH := 0.98
-const FIELD_HALF_HEIGHT := 0.78
-const FIELD_BOUNDARY_X := 0.93
-const FIELD_BOUNDARY_Y := 0.73
-const GOAL_HALF_WIDTH := 0.18
-const GOAL_DEPTH := 0.05
-const PENALTY_AREA_WIDTH := 0.22
-const PENALTY_AREA_HEIGHT := 0.32
-const GOAL_AREA_WIDTH := 0.10
-const GOAL_AREA_HEIGHT := 0.20
-const PENALTY_SPOT_DIST := 0.15
-const CENTER_CIRCLE_RADIUS := 0.16
-const CORNER_ARC_RADIUS := 0.035
-const FIELD_SCALE := 18.0
-const PITCH_Y := 0.0
-const PLAYER_GLB_SCALE := 1.14
-const PLAYER_GLB_Y_OFFSET := 0.0
-const PLAYER_GLB_YAW_OFFSET := 0.0
-const PLAYER_ASSET_DIR := "res://assets/obj_3d_player/"
-const PLAYER_MESH_FILE := "Ch38_nonPBR.glb"
-const PLAYER_GLTF_ANIM := "Armature|mixamo.com|Layer0"
-# Friendly state name -> [animation-only GLB, should loop]. All share the Ch38 mixamorig5 rig,
-# so their clips retarget onto the character mesh skeleton directly.
-const PLAYER_ANIM_FILES := {
-	"idle": ["offensive idle.glb", true],
-	"run": ["jog forward.glb", true],
-	"gk_idle": ["goalkeeper idle.glb", true],
-	"kick": ["kick soccerball.glb", false],
-	"receive": ["receive soccerball.glb", false],
-	"tackle": ["soccer tackle.glb", false],
-}
 
-class PlayerState:
-	var x := 0.0
-	var y := 0.0
-	var speed := 0.2
-	var start_x := 0.0
-	var start_y := 0.0
-	var facing_x := 1.0
-	var facing_y := 0.0
-	var side := 1
-	var role := PlayerRole.MIDFIELDER
-	var team_index := 0
-	var stun_timer := 0.0
-	var kick_power := 0.0
-	var hold_timer := 0.0
-	var is_moving := false
-	var is_targeting_ball := false
-	var node: Node3D
-	var uses_glb := false
-	var visual_model: Node3D
-	var animation_player: AnimationPlayer
-	var visual_state := ""
-	var action_timer := 0.0
-
-	func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> void:
-		x = p_x
-		y = p_y
-		start_x = p_x
-		start_y = p_y
-		speed = p_speed
-		side = p_side
-		role = p_role
-		team_index = 0 if p_side == -1 else 1
-		facing_x = float(p_side)
-
-class BallState:
-	var x := 0.0
-	var y := 0.0
-	var vx := 0.0
-	var vy := 0.0
-	var friction := 0.98
-	var owner_team := -1
-	var owner_index := -1
-	var is_super_shot := false
-	var charging_power := 0.0
-	var spin := 0.0
-	var node: Node3D
-	var light: OmniLight3D
-
-class VfxParticle:
-	var node: MeshInstance3D
-	var velocity := Vector3.ZERO
-	var life := 0.0
-	var max_life := 0.0
-
-	func _init(p_node: MeshInstance3D, p_velocity: Vector3, p_life: float) -> void:
-		node = p_node
-		velocity = p_velocity
-		life = p_life
-		max_life = p_life
-
-# Per-team human input for the current frame. aim_vec is an absolute field point when
-# aim_absolute is true (mouse), otherwise a direction offset from the player (gamepad stick).
-class InputSnapshot:
-	var axis := Vector2.ZERO
-	var shoot_held := false
-	var shoot_prev := false
-	var aim_vec := Vector2.ZERO
-	var aim_absolute := true
-
-enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME }
 
 var materials := {}
 var glb_scene_cache := {}
@@ -136,8 +34,8 @@ var celebration_timer := 0.0
 var camera_look := Vector3.ZERO
 
 # Game state / flow
-var game_state := GameState.MENU
-var prev_menu_state := GameState.MENU
+var game_state := GameConfig.GameState.MENU
+var prev_menu_state := GameConfig.GameState.MENU
 var num_players := 1
 var match_time := 0.0
 var current_half := 1
@@ -164,8 +62,6 @@ var sfx_kick: AudioStreamPlayer
 var sfx_whistle: AudioStreamPlayer
 var bus_music := -1
 var bus_sfx := -1
-const MATCH_LENGTHS := [120.0, 300.0, 600.0]
-const SETTINGS_PATH := "user://settings.cfg"
 
 func _ready() -> void:
 	_build_materials()
@@ -186,11 +82,11 @@ func _ready() -> void:
 	_build_menus()
 	_reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
-	_set_game_state(GameState.MENU)
+	_set_game_state(GameConfig.GameState.MENU)
 	print("Inazuma Eleven 3D environment ready")
 
 func _process(delta: float) -> void:
-	if game_state == GameState.PLAYING:
+	if game_state == GameConfig.GameState.PLAYING:
 		if halftime_pause > 0.0:
 			halftime_pause = maxf(0.0, halftime_pause - delta)
 		else:
@@ -215,32 +111,32 @@ func _exit_tree() -> void:
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		match game_state:
-			GameState.PLAYING:
-				_set_game_state(GameState.PAUSED)
-			GameState.PAUSED:
-				_set_game_state(GameState.PLAYING)
-			GameState.HOWTO, GameState.SETTINGS:
+			GameConfig.GameState.PLAYING:
+				_set_game_state(GameConfig.GameState.PAUSED)
+			GameConfig.GameState.PAUSED:
+				_set_game_state(GameConfig.GameState.PLAYING)
+			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
 				_set_game_state(prev_menu_state)
 		get_viewport().set_input_as_handled()
 
 func _set_game_state(next: int) -> void:
-	if next == GameState.HOWTO or next == GameState.SETTINGS:
-		prev_menu_state = game_state if game_state in [GameState.MENU, GameState.PAUSED] else GameState.MENU
+	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
+		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	game_state = next
-	_set_glb_animations_paused(next != GameState.PLAYING)
+	_set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
 	for key in menu_panels:
 		(menu_panels[key] as Control).visible = false
 	match next:
-		GameState.MENU:
+		GameConfig.GameState.MENU:
 			_refresh_two_player_availability()
 			menu_panels.main.visible = true
-		GameState.HOWTO:
+		GameConfig.GameState.HOWTO:
 			menu_panels.howto.visible = true
-		GameState.SETTINGS:
+		GameConfig.GameState.SETTINGS:
 			menu_panels.settings.visible = true
-		GameState.PAUSED:
+		GameConfig.GameState.PAUSED:
 			menu_panels.pause.visible = true
-		GameState.FULLTIME:
+		GameConfig.GameState.FULLTIME:
 			menu_panels.fulltime.visible = true
 
 func _start_match() -> void:
@@ -251,7 +147,7 @@ func _start_match() -> void:
 	halftime_pause = 0.0
 	_set_default_ends()
 	_reset_game(1)
-	_set_game_state(GameState.PLAYING)
+	_set_game_state(GameConfig.GameState.PLAYING)
 	_play_whistle()
 
 func _update_match_clock(delta: float) -> void:
@@ -276,7 +172,7 @@ func _end_match() -> void:
 		result = "BLUE WINS"
 	if fulltime_label != null:
 		fulltime_label.text = "FULL TIME\n%d - %d\n%s" % [score_left, score_right, result]
-	_set_game_state(GameState.FULLTIME)
+	_set_game_state(GameConfig.GameState.FULLTIME)
 
 func _switch_ends() -> void:
 	for p in team_red:
@@ -311,16 +207,16 @@ func _set_glb_animations_paused(paused: bool) -> void:
 			p.animation_player.speed_scale = speed
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
-	if game_state == GameState.MENU:
+	if game_state == GameConfig.GameState.MENU:
 		_refresh_two_player_availability()
 
 func _refresh_two_player_availability() -> void:
 	if play_2p_button == null:
 		return
 	var pads := Input.get_connected_joypads().size()
-	play_2p_button.disabled = pads < 2
+	play_2p_button.disabled = pads < 1
 	if play_2p_hint != null:
-		play_2p_hint.text = "" if pads >= 2 else "Connect 2 controllers for 2-player"
+		play_2p_hint.text = "" if pads >= 1 else "Connect 1 controller for 2-player"
 
 func _build_materials() -> void:
 	materials.grass = _material(Color.WHITE, 0.9, 0.0, _noise_texture(Color(0.10, 0.35, 0.13), 0.05))
@@ -456,7 +352,7 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	spot.look_at(Vector3(0.0, 0.0, 0.0), Vector3.UP)
 
 func _build_pitch() -> void:
-	var field_size := Vector2(FIELD_HALF_WIDTH * 2.0 * FIELD_SCALE, FIELD_HALF_HEIGHT * 2.0 * FIELD_SCALE)
+	var field_size := Vector2(GameConfig.FIELD_HALF_WIDTH * 2.0 * GameConfig.FIELD_SCALE, GameConfig.FIELD_HALF_HEIGHT * 2.0 * GameConfig.FIELD_SCALE)
 	var pitch := _mesh("GrassPitch", BoxMesh.new(), materials.grass, Vector3(0.0, -0.04, 0.0))
 	pitch.mesh.size = Vector3(field_size.x, 0.08, field_size.y)
 	pitch_root.add_child(pitch)
@@ -469,42 +365,42 @@ func _build_pitch() -> void:
 	_add_field_lines()
 
 func _add_field_lines() -> void:
-	var x := FIELD_BOUNDARY_X * FIELD_SCALE
-	var z := FIELD_BOUNDARY_Y * FIELD_SCALE
+	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE
+	var z := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE
 	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(x, 0.06, -z), 0.07, "SidelineTop")
 	_add_line_segment(Vector3(-x, 0.06, z), Vector3(x, 0.06, z), 0.07, "SidelineBottom")
 	_add_line_segment(Vector3(-x, 0.06, -z), Vector3(-x, 0.06, z), 0.07, "EndlineLeft")
 	_add_line_segment(Vector3(x, 0.06, -z), Vector3(x, 0.06, z), 0.07, "EndlineRight")
 	_add_line_segment(Vector3(0.0, 0.065, -z), Vector3(0.0, 0.065, z), 0.06, "HalfwayLine")
-	_add_circle(Vector3.ZERO, CENTER_CIRCLE_RADIUS * FIELD_SCALE, 64, 0.055, "CenterCircle")
+	_add_circle(Vector3.ZERO, GameConfig.CENTER_CIRCLE_RADIUS * GameConfig.FIELD_SCALE, 64, 0.055, "CenterCircle")
 	_add_spot(Vector3(0.0, 0.055, 0.0), "CenterSpot")
 	for side in [-1, 1]:
-		_add_box_lines(side, PENALTY_AREA_WIDTH, PENALTY_AREA_HEIGHT, "Penalty")
-		_add_box_lines(side, GOAL_AREA_WIDTH, GOAL_AREA_HEIGHT, "GoalArea")
+		_add_box_lines(side, GameConfig.PENALTY_AREA_WIDTH, GameConfig.PENALTY_AREA_HEIGHT, "Penalty")
+		_add_box_lines(side, GameConfig.GOAL_AREA_WIDTH, GameConfig.GOAL_AREA_HEIGHT, "GoalArea")
 		_add_penalty_arc(side)
-		_add_spot(Vector3((FIELD_BOUNDARY_X - PENALTY_SPOT_DIST) * FIELD_SCALE * float(side), 0.055, 0.0), "PenaltySpot%d" % side)
+		_add_spot(Vector3((GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_SPOT_DIST) * GameConfig.FIELD_SCALE * float(side), 0.055, 0.0), "PenaltySpot%d" % side)
 	for corner in [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]:
 		_add_corner_arc(corner)
 		_add_corner_flag(corner)
 
 func _add_box_lines(side: int, depth: float, half_z: float, prefix: String) -> void:
-	var xb := FIELD_BOUNDARY_X * FIELD_SCALE * float(side)
-	var xi := (FIELD_BOUNDARY_X - depth) * FIELD_SCALE * float(side)
-	var z := half_z * FIELD_SCALE
+	var xb := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * float(side)
+	var xi := (GameConfig.FIELD_BOUNDARY_X - depth) * GameConfig.FIELD_SCALE * float(side)
+	var z := half_z * GameConfig.FIELD_SCALE
 	_add_line_segment(Vector3(xb, 0.07, -z), Vector3(xi, 0.07, -z), 0.055, "%sA%d" % [prefix, side])
 	_add_line_segment(Vector3(xb, 0.07, z), Vector3(xi, 0.07, z), 0.055, "%sB%d" % [prefix, side])
 	_add_line_segment(Vector3(xi, 0.07, -z), Vector3(xi, 0.07, z), 0.055, "%sC%d" % [prefix, side])
 
 func _add_penalty_arc(side: int) -> void:
-	var radius := CENTER_CIRCLE_RADIUS * FIELD_SCALE
-	var spot_x := (FIELD_BOUNDARY_X - PENALTY_SPOT_DIST) * FIELD_SCALE * float(side)
-	var box_x := (FIELD_BOUNDARY_X - PENALTY_AREA_WIDTH) * FIELD_SCALE * float(side)
+	var radius := GameConfig.CENTER_CIRCLE_RADIUS * GameConfig.FIELD_SCALE
+	var spot_x := (GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_SPOT_DIST) * GameConfig.FIELD_SCALE * float(side)
+	var box_x := (GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_AREA_WIDTH) * GameConfig.FIELD_SCALE * float(side)
 	var half_angle := acos(absf(box_x - spot_x) / radius)
 	var facing := PI if side == 1 else 0.0
 	_add_arc(Vector3(spot_x, 0.075, 0.0), radius, facing - half_angle, facing + half_angle, 18, 0.055, "PenaltyArc%d" % side)
 
 func _add_corner_arc(corner: Vector2) -> void:
-	var center := Vector3(FIELD_BOUNDARY_X * FIELD_SCALE * corner.x, 0.075, FIELD_BOUNDARY_Y * FIELD_SCALE * corner.y)
+	var center := Vector3(GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * corner.x, 0.075, GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE * corner.y)
 	var a_start := 0.0
 	if corner == Vector2(1, -1):
 		a_start = PI * 0.5
@@ -512,11 +408,11 @@ func _add_corner_arc(corner: Vector2) -> void:
 		a_start = PI
 	elif corner == Vector2(-1, 1):
 		a_start = PI * 1.5
-	_add_arc(center, CORNER_ARC_RADIUS * FIELD_SCALE, a_start, a_start + PI * 0.5, 8, 0.05, "CornerArc%d%d" % [corner.x, corner.y])
+	_add_arc(center, GameConfig.CORNER_ARC_RADIUS * GameConfig.FIELD_SCALE, a_start, a_start + PI * 0.5, 8, 0.05, "CornerArc%d%d" % [corner.x, corner.y])
 
 func _add_corner_flag(corner: Vector2) -> void:
-	var x := FIELD_BOUNDARY_X * FIELD_SCALE * corner.x
-	var z := FIELD_BOUNDARY_Y * FIELD_SCALE * corner.y
+	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * corner.x
+	var z := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE * corner.y
 	var pole := _mesh("CornerPole%d%d" % [corner.x, corner.y], CylinderMesh.new(), materials.goal, Vector3(x, 0.75, z))
 	pole.mesh.height = 1.5
 	pole.mesh.top_radius = 0.022
@@ -565,9 +461,9 @@ func _add_goal(side: int) -> void:
 	var goal := Node3D.new()
 	goal.name = "GoalLeft" if side == -1 else "GoalRight"
 	goals_root.add_child(goal)
-	var x := FIELD_BOUNDARY_X * FIELD_SCALE * float(side)
-	var depth := GOAL_DEPTH * FIELD_SCALE * float(side)
-	var half_w := GOAL_HALF_WIDTH * FIELD_SCALE
+	var x := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE * float(side)
+	var depth := GameConfig.GOAL_DEPTH * GameConfig.FIELD_SCALE * float(side)
+	var half_w := GameConfig.GOAL_HALF_WIDTH * GameConfig.FIELD_SCALE
 	var height := 1.8
 	var post_a := _goal_post(Vector3(x, height * 0.5, -half_w))
 	var post_b := _goal_post(Vector3(x, height * 0.5, half_w))
@@ -611,8 +507,8 @@ func _goal_bar(pos: Vector3, length: float, rot_degrees: Vector3) -> MeshInstanc
 	return bar
 
 func _build_stadium() -> void:
-	var field_x := FIELD_HALF_WIDTH * FIELD_SCALE
-	var field_z := FIELD_HALF_HEIGHT * FIELD_SCALE
+	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
+	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
 	_add_ground_apron()
 	_add_perimeter_walls()
 	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - 5.0), Vector3(field_x * 2.5, 2.0, 5.0), materials.concrete)
@@ -653,8 +549,8 @@ func _add_perimeter_walls() -> void:
 
 func _add_hoardings() -> void:
 	var ads := ["INAZUMA", "RAIMON FC", "ELEVEN TV", "KICK & GO", "SUPERNOVA", "GOAL MART", "METEOR LTD", "STRIKER+"]
-	var bx := FIELD_BOUNDARY_X * FIELD_SCALE
-	var bz := FIELD_BOUNDARY_Y * FIELD_SCALE
+	var bx := GameConfig.FIELD_BOUNDARY_X * GameConfig.FIELD_SCALE
+	var bz := GameConfig.FIELD_BOUNDARY_Y * GameConfig.FIELD_SCALE
 	var idx := 0
 	for i in 8:
 		var x := -13.65 + float(i) * 3.9
@@ -894,8 +790,8 @@ func _build_main_menu() -> void:
 	play_2p_hint.add_theme_font_size_override("font_size", 16)
 	play_2p_hint.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
 	vb.add_child(play_2p_hint)
-	_make_button(vb, "How to Play", func() -> void: _set_game_state(GameState.HOWTO))
-	_make_button(vb, "Settings", func() -> void: _set_game_state(GameState.SETTINGS))
+	_make_button(vb, "How to Play", func() -> void: _set_game_state(GameConfig.GameState.HOWTO))
+	_make_button(vb, "Settings", func() -> void: _set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Quit", func() -> void: get_tree().quit())
 
 func _build_howto_panel() -> void:
@@ -905,7 +801,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (two controllers required)\nMove: Left stick    Aim: Right stick\nShoot: R1 / RB  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
+	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\n\n2 PLAYERS (keyboard + mouse vs controller)\nP1 Move: W A S D    Aim: Mouse    Shoot: SPACE\nP2 Move: Left stick    Aim: Right stick\nP2 Shoot: R1 / RB  (hold to charge)\n\nYou control the player nearest the ball.\nPress ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: _set_game_state(prev_menu_state))
 
@@ -913,17 +809,17 @@ func _build_pause_panel() -> void:
 	var panel := _make_panel("pause")
 	var vb := _make_vbox(panel)
 	_make_title(vb, "Paused")
-	_make_button(vb, "Resume", func() -> void: _set_game_state(GameState.PLAYING))
+	_make_button(vb, "Resume", func() -> void: _set_game_state(GameConfig.GameState.PLAYING))
 	_make_button(vb, "Restart Match", func() -> void: _start_match())
-	_make_button(vb, "Settings", func() -> void: _set_game_state(GameState.SETTINGS))
-	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameState.MENU))
+	_make_button(vb, "Settings", func() -> void: _set_game_state(GameConfig.GameState.SETTINGS))
+	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameConfig.GameState.MENU))
 
 func _build_fulltime_panel() -> void:
 	var panel := _make_panel("fulltime")
 	var vb := _make_vbox(panel)
 	fulltime_label = _make_title(vb, "FULL TIME")
 	_make_button(vb, "Rematch", func() -> void: _start_match())
-	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameState.MENU))
+	_make_button(vb, "Back to Menu", func() -> void: _set_game_state(GameConfig.GameState.MENU))
 
 func _build_settings_panel() -> void:
 	var panel := _make_panel("settings")
@@ -942,8 +838,8 @@ func _build_settings_panel() -> void:
 	length_opt.add_item("2 min halves")
 	length_opt.add_item("5 min halves")
 	length_opt.add_item("10 min halves")
-	length_opt.selected = MATCH_LENGTHS.find(half_length) if MATCH_LENGTHS.has(half_length) else 0
-	length_opt.item_selected.connect(func(i: int) -> void: half_length = MATCH_LENGTHS[i]; _save_settings())
+	length_opt.selected = GameConfig.MATCH_LENGTHS.find(half_length) if GameConfig.MATCH_LENGTHS.has(half_length) else 0
+	length_opt.item_selected.connect(func(i: int) -> void: half_length = GameConfig.MATCH_LENGTHS[i]; _save_settings())
 	_settings_row(vb, "Match Length", length_opt)
 
 	var fs_check := CheckButton.new()
@@ -992,7 +888,7 @@ func _apply_settings() -> void:
 
 func _load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SETTINGS_PATH) == OK:
+	if cfg.load(GameConfig.SETTINGS_PATH) == OK:
 		difficulty = cfg.get_value("game", "difficulty", difficulty)
 		half_length = cfg.get_value("game", "half_length", half_length)
 		fullscreen = cfg.get_value("video", "fullscreen", fullscreen)
@@ -1009,7 +905,7 @@ func _save_settings() -> void:
 	cfg.set_value("audio", "master", vol_master)
 	cfg.set_value("audio", "music", vol_music)
 	cfg.set_value("audio", "sfx", vol_sfx)
-	cfg.save(SETTINGS_PATH)
+	cfg.save(GameConfig.SETTINGS_PATH)
 
 func _setup_input_actions() -> void:
 	_add_key_action("move_up", KEY_W)
@@ -1044,28 +940,28 @@ func _create_teams() -> void:
 	team_blue.clear()
 	var s := 0.2
 	var gk_speed := 0.32
-	_add_player(team_red, -FIELD_BOUNDARY_X, 0.00, gk_speed, -1, PlayerRole.GOALKEEPER)
-	_add_player(team_red, -0.65, 0.25, s, -1, PlayerRole.DEFENDER)
-	_add_player(team_red, -0.65, -0.25, s, -1, PlayerRole.DEFENDER)
-	_add_player(team_red, -0.60, 0.50, s, -1, PlayerRole.DEFENDER)
-	_add_player(team_red, -0.60, -0.50, s, -1, PlayerRole.DEFENDER)
-	_add_player(team_red, -0.35, 0.00, s, -1, PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.35, 0.30, s, -1, PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.35, -0.30, s, -1, PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.10, 0.00, s, -1, PlayerRole.ATTACKER)
-	_add_player(team_red, -0.10, 0.40, s, -1, PlayerRole.ATTACKER)
-	_add_player(team_red, -0.10, -0.40, s, -1, PlayerRole.ATTACKER)
-	_add_player(team_blue, FIELD_BOUNDARY_X, 0.00, gk_speed, 1, PlayerRole.GOALKEEPER)
-	_add_player(team_blue, 0.65, 0.25, s, 1, PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.65, -0.25, s, 1, PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.60, 0.50, s, 1, PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.60, -0.50, s, 1, PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.35, 0.00, s, 1, PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.35, 0.30, s, 1, PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.35, -0.30, s, 1, PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.10, 0.00, s, 1, PlayerRole.ATTACKER)
-	_add_player(team_blue, 0.10, 0.40, s, 1, PlayerRole.ATTACKER)
-	_add_player(team_blue, 0.10, -0.40, s, 1, PlayerRole.ATTACKER)
+	_add_player(team_red, -GameConfig.FIELD_BOUNDARY_X, 0.00, gk_speed, -1, GameConfig.PlayerRole.GOALKEEPER)
+	_add_player(team_red, -0.65, 0.25, s, -1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_red, -0.65, -0.25, s, -1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_red, -0.60, 0.50, s, -1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_red, -0.60, -0.50, s, -1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_red, -0.35, 0.00, s, -1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_red, -0.35, 0.30, s, -1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_red, -0.35, -0.30, s, -1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_red, -0.10, 0.00, s, -1, GameConfig.PlayerRole.ATTACKER)
+	_add_player(team_red, -0.10, 0.40, s, -1, GameConfig.PlayerRole.ATTACKER)
+	_add_player(team_red, -0.10, -0.40, s, -1, GameConfig.PlayerRole.ATTACKER)
+	_add_player(team_blue, GameConfig.FIELD_BOUNDARY_X, 0.00, gk_speed, 1, GameConfig.PlayerRole.GOALKEEPER)
+	_add_player(team_blue, 0.65, 0.25, s, 1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_blue, 0.65, -0.25, s, 1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_blue, 0.60, 0.50, s, 1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_blue, 0.60, -0.50, s, 1, GameConfig.PlayerRole.DEFENDER)
+	_add_player(team_blue, 0.35, 0.00, s, 1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_blue, 0.35, 0.30, s, 1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_blue, 0.35, -0.30, s, 1, GameConfig.PlayerRole.MIDFIELDER)
+	_add_player(team_blue, 0.10, 0.00, s, 1, GameConfig.PlayerRole.ATTACKER)
+	_add_player(team_blue, 0.10, 0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
+	_add_player(team_blue, 0.10, -0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
 
 func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, side: int, role: int) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)
@@ -1079,7 +975,7 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 		return glb_visual
 	var root := Node3D.new()
 	root.name = "RedPlayer" if state.side == -1 else "BluePlayer"
-	var uniform: Material = materials.goalkeeper if state.role == PlayerRole.GOALKEEPER else (materials.player_red if state.side == -1 else materials.player_blue)
+	var uniform: Material = materials.goalkeeper if state.role == GameConfig.PlayerRole.GOALKEEPER else (materials.player_red if state.side == -1 else materials.player_blue)
 	var body := _mesh("Body", BoxMesh.new(), uniform, Vector3(0.0, 0.78, 0.0))
 	body.mesh.size = Vector3(0.42, 0.82, 0.26)
 	root.add_child(body)
@@ -1132,16 +1028,16 @@ func _create_glb_player_visual(state: PlayerState):
 	power.visible = false
 	root.add_child(power)
 	# Load the character mesh once and drive its skeleton with retargeted Mixamo clips.
-	var model: Node3D = _instantiate_glb(PLAYER_ASSET_DIR + PLAYER_MESH_FILE)
+	var model: Node3D = _instantiate_glb(GameConfig.PLAYER_ASSET_DIR + GameConfig.PLAYER_MESH_FILE)
 	if model == null:
-		push_warning("Player GLB mesh failed to load: %s" % (PLAYER_ASSET_DIR + PLAYER_MESH_FILE))
+		push_warning("Player GLB mesh failed to load: %s" % (GameConfig.PLAYER_ASSET_DIR + GameConfig.PLAYER_MESH_FILE))
 		state.uses_glb = false
 		root.free()
 		return null
 	_place_glb_model(model)
 	_apply_team_tint(model, state.team_index)
 	model.name = "Model"
-	model.rotation_degrees = Vector3(0.0, PLAYER_GLB_YAW_OFFSET, 0.0)
+	model.rotation_degrees = Vector3(0.0, GameConfig.PLAYER_GLB_YAW_OFFSET, 0.0)
 	root.add_child(model)
 	if _ensure_player_anim_library():
 		var anim := AnimationPlayer.new()
@@ -1154,7 +1050,7 @@ func _create_glb_player_visual(state: PlayerState):
 	else:
 		push_warning("Player GLB animations unavailable; using static mesh.")
 	state.visual_model = model
-	_set_glb_visual_state(state, "gk_idle" if state.role == PlayerRole.GOALKEEPER else "idle")
+	_set_glb_visual_state(state, "gk_idle" if state.role == GameConfig.PlayerRole.GOALKEEPER else "idle")
 	return root
 
 # Builds the shared library of named clips extracted from the animation-only action GLBs.
@@ -1163,10 +1059,10 @@ func _ensure_player_anim_library() -> bool:
 		return player_anim_library != null
 	player_anim_ready = true
 	var lib := AnimationLibrary.new()
-	for state_name in PLAYER_ANIM_FILES:
-		var entry: Array = PLAYER_ANIM_FILES[state_name]
-		var path: String = PLAYER_ASSET_DIR + entry[0]
-		var anim := _load_glb_animation(path)
+	for state_name in GameConfig.PLAYER_ANIM_FILES:
+		var entry: Array = GameConfig.PLAYER_ANIM_FILES[state_name]
+		var path: String = GameConfig.PLAYER_ASSET_DIR + entry[0]
+		var anim := _load_player_animation(path)
 		if anim == null:
 			push_warning("Player animation missing or unreadable: %s" % path)
 			continue
@@ -1179,13 +1075,13 @@ func _ensure_player_anim_library() -> bool:
 	player_anim_library = lib
 	return true
 
-func _load_glb_animation(path: String) -> Animation:
+func _load_player_animation(path: String) -> Animation:
 	if not ResourceLoader.exists(path, "PackedScene"):
-		push_warning("GLB animation file is not imported as PackedScene: %s" % path)
+		push_warning("Player animation file is not imported as PackedScene: %s" % path)
 		return null
 	var packed := ResourceLoader.load(path, "PackedScene") as PackedScene
 	if packed == null:
-		push_warning("GLB animation file failed to load: %s" % path)
+		push_warning("Player animation file failed to load: %s" % path)
 		return null
 	var scene := packed.instantiate()
 	var ap := _find_animation_player(scene)
@@ -1195,13 +1091,13 @@ func _load_glb_animation(path: String) -> Animation:
 		if not String(anim_name).is_empty():
 			anim = ap.get_animation(anim_name).duplicate()
 	else:
-		push_warning("GLB has no AnimationPlayer: %s" % path)
+		push_warning("Player animation scene has no AnimationPlayer: %s" % path)
 	scene.free()
 	return anim
 
 func _first_glb_animation(player: AnimationPlayer) -> StringName:
-	if player.has_animation(PLAYER_GLTF_ANIM):
-		return StringName(PLAYER_GLTF_ANIM)
+	if player.has_animation(GameConfig.PLAYER_GLTF_ANIM):
+		return StringName(GameConfig.PLAYER_GLTF_ANIM)
 	for anim_name in player.get_animation_list():
 		if String(anim_name).to_lower() != "reset":
 			return anim_name
@@ -1257,14 +1153,14 @@ func _place_glb_model(model: Node3D) -> void:
 	model.position = Vector3.ZERO
 	var bounds := _node_local_bounds(model)
 	if bounds.size.length() <= 0.001 or bounds.size.y <= 0.001:
-		model.scale = Vector3.ONE * PLAYER_GLB_SCALE
-		model.position = Vector3(0.0, PLAYER_GLB_Y_OFFSET, 0.0)
+		model.scale = Vector3.ONE * GameConfig.PLAYER_GLB_SCALE
+		model.position = Vector3(0.0, GameConfig.PLAYER_GLB_Y_OFFSET, 0.0)
 		push_warning("Player GLB bounds unavailable; using fixed imported-model scale.")
 		return
-	var scale := PLAYER_GLB_SCALE
+	var scale := GameConfig.PLAYER_GLB_SCALE
 	var center := bounds.position + bounds.size * 0.5
 	model.scale = Vector3.ONE * scale
-	model.position = Vector3(-center.x * scale, PLAYER_GLB_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
+	model.position = Vector3(-center.x * scale, GameConfig.PLAYER_GLB_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
 
 func _apply_team_tint(model: Node3D, team_index: int) -> void:
 	var tint := Color(0.95, 0.10, 0.08) if team_index == 0 else Color(0.08, 0.36, 1.0)
@@ -1393,12 +1289,14 @@ func _team_index_for_side(side: int) -> int:
 
 func _read_input() -> void:
 	var allow := kickoff_timer <= 0.0
-	# Red (team 0) is keyboard+mouse in 1P, gamepad 0 in 2P. Blue (team 1) is gamepad 1 in 2P.
-	if num_players == 1:
-		_read_keyboard_input(inputs[0], allow)
-	else:
-		_read_gamepad_input(inputs[0], 0, allow)
-		_read_gamepad_input(inputs[1], 1, allow)
+	# Red (team 0) always uses keyboard+mouse. In 2P, blue uses the first connected controller.
+	_read_keyboard_input(inputs[0], allow)
+	if num_players == 2:
+		_read_gamepad_input(inputs[1], _first_connected_gamepad(), allow)
+
+func _first_connected_gamepad() -> int:
+	var pads := Input.get_connected_joypads()
+	return -1 if pads.size() == 0 else int(pads[0])
 
 func _read_keyboard_input(snap: InputSnapshot, allow: bool) -> void:
 	snap.axis = Vector2.ZERO
@@ -1414,7 +1312,13 @@ func _read_keyboard_input(snap: InputSnapshot, allow: bool) -> void:
 func _read_gamepad_input(snap: InputSnapshot, device: int, allow: bool) -> void:
 	var dead := 0.22
 	snap.axis = Vector2.ZERO
-	var move := Vector2(Input.get_joy_axis(device, JOY_AXIS_LEFT_X), Input.get_joy_axis(device, JOY_AXIS_LEFT_Y))
+	if device < 0:
+		snap.shoot_prev = snap.shoot_held
+		snap.shoot_held = false
+		snap.aim_vec = Vector2.ZERO
+		snap.aim_absolute = false
+		return
+	var move := Vector2(Input.get_joy_axis(device, JOY_AXIS_LEFT_X), -Input.get_joy_axis(device, JOY_AXIS_LEFT_Y))
 	if allow and move.length() > dead:
 		snap.axis = move if move.length() <= 1.0 else move.normalized()
 	snap.shoot_prev = snap.shoot_held
@@ -1434,7 +1338,7 @@ func _mouse_aim_world() -> Vector2:
 	var hit = Plane(Vector3.UP, 0.0).intersects_ray(origin, dir)
 	if hit == null:
 		return Vector2.ZERO
-	return Vector2(hit.x / FIELD_SCALE, -hit.z / FIELD_SCALE)
+	return Vector2(hit.x / GameConfig.FIELD_SCALE, -hit.z / GameConfig.FIELD_SCALE)
 
 func _update_kickoff(delta: float) -> void:
 	if kickoff_timer > 0.0:
@@ -1457,22 +1361,22 @@ func _update_ball(delta: float) -> int:
 	var radius := 0.015
 	var hit_x := false
 	var hit_y := false
-	if ball.x > FIELD_BOUNDARY_X - radius:
-		ball.x = FIELD_BOUNDARY_X - radius
+	if ball.x > GameConfig.FIELD_BOUNDARY_X - radius:
+		ball.x = GameConfig.FIELD_BOUNDARY_X - radius
 		hit_x = true
-	elif ball.x < -FIELD_BOUNDARY_X + radius:
-		ball.x = -FIELD_BOUNDARY_X + radius
+	elif ball.x < -GameConfig.FIELD_BOUNDARY_X + radius:
+		ball.x = -GameConfig.FIELD_BOUNDARY_X + radius
 		hit_x = true
-	if ball.y > FIELD_BOUNDARY_Y - radius:
-		ball.y = FIELD_BOUNDARY_Y - radius
+	if ball.y > GameConfig.FIELD_BOUNDARY_Y - radius:
+		ball.y = GameConfig.FIELD_BOUNDARY_Y - radius
 		hit_y = true
-	elif ball.y < -FIELD_BOUNDARY_Y + radius:
-		ball.y = -FIELD_BOUNDARY_Y + radius
+	elif ball.y < -GameConfig.FIELD_BOUNDARY_Y + radius:
+		ball.y = -GameConfig.FIELD_BOUNDARY_Y + radius
 		hit_y = true
 	if hit_y:
 		ball.vy *= -1.0
 	if hit_x:
-		if absf(ball.y) > GOAL_HALF_WIDTH:
+		if absf(ball.y) > GameConfig.GOAL_HALF_WIDTH:
 			ball.vx *= -1.0
 		elif ball.x > 0.0:
 			return _score_goal_against(1)
@@ -1511,7 +1415,7 @@ func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
 	var best := -1
 	var best_dist := INF
 	for i in team.size():
-		if team[i].role == PlayerRole.GOALKEEPER and not (ball.owner_team == team_idx and ball.owner_index == i):
+		if team[i].role == GameConfig.PlayerRole.GOALKEEPER and not (ball.owner_team == team_idx and ball.owner_index == i):
 			continue
 		var d := Vector2(team[i].x - ball.x, team[i].y - ball.y).length()
 		if d < best_dist:
@@ -1553,19 +1457,19 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
 	var current_speed := p.speed * ai_speed_mult * (0.3 if p.stun_timer > 0.0 else 1.0)
-	if p.role == PlayerRole.GOALKEEPER:
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		if ball.owner_team == team_idx and ball.owner_index == player_idx:
 			p.hold_timer += delta
 			if p.hold_timer > 1.0:
-				var clear_target := _best_pass_target(p, team, opponents, -float(p.side) * FIELD_BOUNDARY_X)
+				var clear_target := _best_pass_target(p, team, opponents, -float(p.side) * GameConfig.FIELD_BOUNDARY_X)
 				if clear_target != null:
 					_kick_from_player(p, Vector2(clear_target.x, clear_target.y), 0.45, false)
 				else:
 					_kick_from_player(p, Vector2(-float(p.side) * 0.3, randf_range(-0.5, 0.5)), 0.7, false)
 			return
 		p.hold_timer = 0.0
-		var target_y := clampf(ball.y, -GOAL_HALF_WIDTH, GOAL_HALF_WIDTH)
-		var target_x := -FIELD_BOUNDARY_X if p.side == -1 else FIELD_BOUNDARY_X
+		var target_y := clampf(ball.y, -GameConfig.GOAL_HALF_WIDTH, GameConfig.GOAL_HALF_WIDTH)
+		var target_x := -GameConfig.FIELD_BOUNDARY_X if p.side == -1 else GameConfig.FIELD_BOUNDARY_X
 		_move_towards(p, Vector2(target_x, target_y), current_speed, delta)
 		return
 	if ball.owner_team == team_idx and ball.owner_index == player_idx:
@@ -1575,11 +1479,11 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 	var target := Vector2(p.start_x, p.start_y)
 	if own_team_has_ball:
 		var attack_dir := -float(p.side)
-		var advance := 0.25 if p.role == PlayerRole.DEFENDER else (0.50 if p.role == PlayerRole.MIDFIELDER else 0.78)
+		var advance := 0.25 if p.role == GameConfig.PlayerRole.DEFENDER else (0.50 if p.role == GameConfig.PlayerRole.MIDFIELDER else 0.78)
 		target = Vector2(p.start_x + attack_dir * advance, p.start_y * 0.85 + ball.y * 0.15)
 	else:
 		var ball_owner := _owner_player()
-		if ball_owner != null and ball_owner.role == PlayerRole.GOALKEEPER:
+		if ball_owner != null and ball_owner.role == GameConfig.PlayerRole.GOALKEEPER:
 			target = Vector2(p.start_x, p.start_y)
 		elif _is_presser(team, player_idx, 1 if _ball_in_own_third(p.side) else 2):
 			target = Vector2(ball.x, ball.y)
@@ -1587,7 +1491,7 @@ func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Arra
 			var ball_y_weight := 0.14 if _ball_in_own_third(p.side) else 0.25
 			target = Vector2(p.start_x + (ball.x - p.start_x) * 0.2, p.start_y + (ball.y - p.start_y) * ball_y_weight)
 			if _ball_in_own_third(p.side):
-				var deepest_x := FIELD_BOUNDARY_X - (0.14 if p.role == PlayerRole.DEFENDER else 0.24)
+				var deepest_x := GameConfig.FIELD_BOUNDARY_X - (0.14 if p.role == GameConfig.PlayerRole.DEFENDER else 0.24)
 				if p.side == 1:
 					target.x = minf(target.x, deepest_x)
 				else:
@@ -1605,7 +1509,7 @@ func _is_presser(team: Array[PlayerState], player_idx: int, press_limit: int) ->
 	var my_dist := Vector2(team[player_idx].x - ball.x, team[player_idx].y - ball.y).length()
 	var closer := 0
 	for i in team.size():
-		if i == player_idx or team[i].role == PlayerRole.GOALKEEPER:
+		if i == player_idx or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
 			continue
 		if Vector2(team[i].x - ball.x, team[i].y - ball.y).length() < my_dist:
 			closer += 1
@@ -1617,7 +1521,7 @@ func _ball_in_own_third(side: int) -> bool:
 	return ball.x * float(side) > 0.58
 
 func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float) -> void:
-	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
+	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
 	if dist_to_goal < 0.40 and randf() < 2.4 * ai_decision_mult * delta:
 		_kick_from_player(p, Vector2(target_goal_x, 0.0), 0.75, false)
@@ -1643,7 +1547,7 @@ func _best_pass_target(p: PlayerState, team: Array[PlayerState], opponents: Arra
 	var best_score := -999.0
 	var owner_goal_dist := Vector2(target_goal_x - p.x, -p.y).length()
 	for mate in team:
-		if mate == p or mate.role == PlayerRole.GOALKEEPER:
+		if mate == p or mate.role == GameConfig.PlayerRole.GOALKEEPER:
 			continue
 		var mate_goal_dist := Vector2(target_goal_x - mate.x, -mate.y).length()
 		if mate_goal_dist >= owner_goal_dist:
@@ -1652,7 +1556,7 @@ func _best_pass_target(p: PlayerState, team: Array[PlayerState], opponents: Arra
 		for opp in opponents:
 			if Vector2(opp.x - mate.x, opp.y - mate.y).length() < 0.18:
 				open = false
-		var role_bonus := 4.0 if mate.role == PlayerRole.ATTACKER else (2.0 if mate.role == PlayerRole.MIDFIELDER else 0.0)
+		var role_bonus := 4.0 if mate.role == GameConfig.PlayerRole.ATTACKER else (2.0 if mate.role == GameConfig.PlayerRole.MIDFIELDER else 0.0)
 		var candidate := role_bonus + 1.0 / (1.0 + Vector2(mate.x - p.x, mate.y - p.y).length())
 		if open and candidate > best_score:
 			best_score = candidate
@@ -1672,7 +1576,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.vx = dir.x * final_power
 	ball.vy = dir.y * final_power
 	ball.spin = final_power * 8.0
-	var target_goal_x := FIELD_BOUNDARY_X if p.side == -1 else -FIELD_BOUNDARY_X
+	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
 	ball.is_super_shot = user_shot and power > 0.5 and dist_to_goal < 0.65
 	ball.charging_power = 0.0
@@ -1688,7 +1592,7 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int) -> void:
 	var p := team[player_idx]
 	var capture_radius := 0.045
-	if p.role == PlayerRole.GOALKEEPER:
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		capture_radius = 0.05 if ball.is_super_shot else 0.10
 	if Vector2(p.x - ball.x, p.y - ball.y).length() < capture_radius:
 		if ball.owner_team == -1 and p.stun_timer <= 0.0:
@@ -1696,7 +1600,7 @@ func _try_capture_ball(team: Array[PlayerState], team_idx: int, player_idx: int)
 			_play_glb_action(p, "receive", 0.45)
 		elif ball.owner_team != -1 and _owner_side() != p.side and p.stun_timer <= 0.0:
 			var old := _owner_player()
-			if old != null and old.role != PlayerRole.GOALKEEPER:
+			if old != null and old.role != GameConfig.PlayerRole.GOALKEEPER:
 				old.stun_timer = 0.45
 				old.kick_power = 0.0
 				_set_owner(team_idx, player_idx)
@@ -1715,16 +1619,16 @@ func _move_towards(p: PlayerState, target: Vector2, current_speed: float, delta:
 
 func _clamp_player(p: PlayerState) -> void:
 	var half := 0.025
-	if p.role == PlayerRole.GOALKEEPER:
-		var area_limit := FIELD_BOUNDARY_X - PENALTY_AREA_WIDTH
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
+		var area_limit := GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_AREA_WIDTH
 		if p.side == -1:
-			p.x = clampf(p.x, -FIELD_BOUNDARY_X + half, -area_limit + half)
+			p.x = clampf(p.x, -GameConfig.FIELD_BOUNDARY_X + half, -area_limit + half)
 		else:
-			p.x = clampf(p.x, area_limit - half, FIELD_BOUNDARY_X - half)
-		p.y = clampf(p.y, -PENALTY_AREA_HEIGHT + half, PENALTY_AREA_HEIGHT - half)
+			p.x = clampf(p.x, area_limit - half, GameConfig.FIELD_BOUNDARY_X - half)
+		p.y = clampf(p.y, -GameConfig.PENALTY_AREA_HEIGHT + half, GameConfig.PENALTY_AREA_HEIGHT - half)
 	else:
-		p.x = clampf(p.x, -FIELD_BOUNDARY_X + half, FIELD_BOUNDARY_X - half)
-		p.y = clampf(p.y, -FIELD_BOUNDARY_Y + half, FIELD_BOUNDARY_Y - half)
+		p.x = clampf(p.x, -GameConfig.FIELD_BOUNDARY_X + half, GameConfig.FIELD_BOUNDARY_X - half)
+		p.y = clampf(p.y, -GameConfig.FIELD_BOUNDARY_Y + half, GameConfig.FIELD_BOUNDARY_Y - half)
 
 func _update_visuals(delta: float) -> void:
 	for i in team_red.size():
@@ -1742,7 +1646,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	if p.uses_glb:
 		_update_glb_player_visual(p, owns_ball, delta)
 		return
-	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
+	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
@@ -1762,14 +1666,14 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 		p.node.position.y = 0.0
 
 func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
-	p.node.position = to_3d(Vector2(p.x, p.y), 0.0)
+	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := Vector3(p.facing_x, 0.0, -p.facing_y)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
 	if p.action_timer > 0.0:
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
-		if p.role == PlayerRole.GOALKEEPER:
+		if p.role == GameConfig.PlayerRole.GOALKEEPER:
 			_set_glb_visual_state(p, "run" if p.is_moving else "gk_idle")
 		else:
 			_set_glb_visual_state(p, "run" if p.is_moving else "idle")
@@ -1784,7 +1688,7 @@ func _update_ball_visual(delta: float) -> void:
 		return
 	var speed := Vector2(ball.vx, ball.vy).length()
 	var visual_height := 0.26 + minf(0.55, speed * 0.22)
-	ball.node.position = to_3d(Vector2(ball.x, ball.y), visual_height)
+	ball.node.position = GameConfig.to_3d(Vector2(ball.x, ball.y), visual_height)
 	ball.node.rotate_x(speed * delta * 14.0)
 	ball.node.rotate_z(ball.spin * delta)
 	ball.light.light_energy = ball.charging_power * 4.0 + (2.5 if ball.is_super_shot and speed > 0.05 else 0.0)
@@ -1808,16 +1712,16 @@ func _update_ball_trail(speed: float) -> void:
 func _update_camera(delta: float) -> void:
 	if camera_rig == null or camera_3d == null:
 		return
-	var target_pos := Vector3(clampf(ball.x * FIELD_SCALE * 0.25, -5.0, 5.0), 18.0, 24.0 + clampf(-ball.y * FIELD_SCALE * 0.12, -2.5, 2.5))
+	var target_pos := Vector3(clampf(ball.x * GameConfig.FIELD_SCALE * 0.25, -5.0, 5.0), 18.0, 24.0 + clampf(-ball.y * GameConfig.FIELD_SCALE * 0.12, -2.5, 2.5))
 	camera_rig.position = camera_rig.position.lerp(target_pos, 1.0 - exp(-1.8 * delta))
-	camera_look = camera_look.lerp(to_3d(Vector2(ball.x, ball.y), 0.2), 1.0 - exp(-3.5 * delta))
+	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(ball.x, ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)
 
 func _update_scoreboard() -> void:
 	if score_label != null:
 		score_label.text = "%d - %d" % [score_left, score_right]
 	if timer_label != null:
-		if game_state != GameState.PLAYING:
+		if game_state != GameConfig.GameState.PLAYING:
 			timer_label.text = ""
 		elif kickoff_timer > 0.0:
 			timer_label.text = "Kickoff %.1f" % kickoff_timer
@@ -1837,7 +1741,7 @@ func _spawn_confetti() -> void:
 			mat = materials.confetti_red
 		elif i % 3 == 1:
 			mat = materials.confetti_blue
-		var piece := _mesh("Confetti", BoxMesh.new(), mat, to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
+		var piece := _mesh("Confetti", BoxMesh.new(), mat, GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
 		piece.mesh.size = Vector3(0.10, 0.035, 0.16)
 		vfx_root.add_child(piece)
 		var velocity := Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
@@ -1936,5 +1840,3 @@ func _net_texture(size := 64, step := 8) -> Texture2D:
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
-func to_3d(p: Vector2, height := 0.0) -> Vector3:
-	return Vector3(p.x * FIELD_SCALE, height, -p.y * FIELD_SCALE)
