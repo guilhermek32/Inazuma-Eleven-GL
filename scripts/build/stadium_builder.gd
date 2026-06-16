@@ -37,11 +37,11 @@ func _build_environment() -> void:
 	# surfaces (posts, poles) catch the sky colour instead of a flat grey fill.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_color = Color(0.45, 0.55, 0.78)
-	env.ambient_light_energy = 0.28
+	env.ambient_light_energy = 0.5
 	# ACES HDR tonemapping: cinematic highlight roll-off so the bright floodlights
 	# and neon signs compress gracefully instead of blowing out.
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.1
+	env.tonemap_exposure = 1.35
 	env.tonemap_white = 8.0
 	# Glow/bloom: raised HDR threshold + lower intensity so only the brightest
 	# emitters (lamp housings, neon ad-boards, scoreboard) bloom without leaking
@@ -101,7 +101,7 @@ func _build_lighting() -> void:
 	var moon := DirectionalLight3D.new()
 	moon.name = "MoonLight"
 	moon.light_color = Color(0.60, 0.68, 0.88)
-	moon.light_energy = 0.45
+	moon.light_energy = 0.9
 	moon.light_specular = 0.5
 	moon.light_angular_distance = 0.8
 	# Moon is fill light only — its single hard CSM shadow was the lone visible one
@@ -187,7 +187,7 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	var spot := SpotLight3D.new()
 	spot.name = "SpotLight3D"
 	spot.light_color = Color(0.85, 0.92, 1.0)
-	spot.light_energy = 18.0
+	spot.light_energy = 30.0
 	spot.light_specular = 1.0
 	spot.spot_range = 90.0
 	spot.spot_angle = 50.0
