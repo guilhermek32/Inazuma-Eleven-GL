@@ -144,7 +144,11 @@ func _input(event: InputEvent) -> void:
 			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
 				_set_game_state(prev_menu_state)
 			GameConfig.GameState.MATCH_SETUP:
-				_set_game_state(GameConfig.GameState.MENU)
+				# Only the keyboard Esc backs out here; the pad's Start/A are
+				# MatchSetup's "begin match" confirm, so don't let Start (also bound
+				# to ui_cancel) double as a cancel and bounce us back to the menu.
+				if event is InputEventKey:
+					_set_game_state(GameConfig.GameState.MENU)
 		get_viewport().set_input_as_handled()
 
 func _set_game_state(next: int) -> void:

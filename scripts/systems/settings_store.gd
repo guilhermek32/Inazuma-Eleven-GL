@@ -84,6 +84,7 @@ func _add_joy_button_action(action: StringName, button_index: JoyButton) -> void
 		InputMap.add_action(action)
 	var event := InputEventJoypadButton.new()
 	event.button_index = button_index
+	event.device = -1   # all devices, so any pad (not just gamepad 0) can confirm/pause menus
 	for existing in InputMap.action_get_events(action):
 		if existing is InputEventJoypadButton and existing.button_index == button_index:
 			return
