@@ -109,6 +109,25 @@ func _mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshIn
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	return node
 
+## Union of every MeshInstance3D AABB in `root`'s subtree, expressed in `root`'s
+## local space (its own transform is ignored). Walks local transforms, so it works
+## on a subtree not yet added to the scene tree; returns an empty AABB if none found.
+## Used to size/centre loaded GLB models (ball, players).
+func subtree_local_aabb(root: Node3D) -> AABB:
+	var acc := {"box": AABB(), "has": false}
+	_accumulate_subtree_aabb(root, Transform3D.IDENTITY, acc, true)
+	return acc.box
+
+func _accumulate_subtree_aabb(node: Node3D, xform: Transform3D, acc: Dictionary, is_root: bool) -> void:
+	var here := xform if is_root else xform * node.transform
+	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
+		var box := here * (node as MeshInstance3D).mesh.get_aabb()
+		acc.box = (acc.box as AABB).merge(box) if acc.has else box
+		acc.has = true
+	for child in node.get_children():
+		if child is Node3D:
+			_accumulate_subtree_aabb(child as Node3D, here, acc, false)
+
 func _material(color: Color, roughness := 0.65, metallic := 0.0, texture: Texture2D = null, normal: Texture2D = null) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color

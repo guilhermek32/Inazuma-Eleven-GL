@@ -2,9 +2,16 @@ class_name StadiumBuilder
 extends RefCounted
 
 ## Builds the night environment, broadcast camera, floodlights and the stadium
-## shell (stands, walls, hoardings, scoreboard, crowd). `host` receives the
-## top-level nodes (environment/camera/lights); `stadium_root` the structure.
+## shell (stands, walls, hoardings, crowd). `host` receives the top-level nodes
+## (environment/camera/lights); `stadium_root` the structure.
 ## After `_build_camera()`, read back `camera_rig`/`camera_3d`.
+
+# Stand placement, as fractions of FIELD_SCALE. The /18.0 denominators are legacy
+# proportions from when the pitch spanned 18 world units; kept so the stadium keeps
+# its tuned look at the current FIELD_SCALE. Shared so the stand shells
+# (_build_stadium) and the crowd banks (_add_crowd) stay aligned.
+const STAND_GAP_Z := 5.0 / 18.0    # north/south stands: gap from pitch edge
+const STAND_GAP_X := 5.5 / 18.0    # east/west stands: gap from pitch edge
 
 var mf: MaterialFactory
 var host: Node3D
@@ -121,7 +128,7 @@ func _build_lighting() -> void:
 		_add_floodlight(flood_root, positions[i], i)
 
 # Global illumination probe. Created after the static geometry (pitch, stands,
-# goals, emissive hoardings/scoreboard) is built; bake() is triggered separately by
+# goals, emissive hoardings) is built; bake() is triggered separately by
 # the controller, deferred one frame and before the dynamic players exist, so the
 # probe captures only static surfaces and the coloured neon spill bounces onto turf.
 func _build_gi() -> void:
@@ -129,7 +136,7 @@ func _build_gi() -> void:
 	voxel_gi = VoxelGI.new()
 	voxel_gi.name = "VoxelGI"
 	voxel_gi.subdiv = VoxelGI.SUBDIV_256   # high resolution; realism is the priority
-	# Cover the playfield + lower stands + hoardings/scoreboard height.
+	# Cover the playfield + lower stands + hoarding height.
 	voxel_gi.size = Vector3(s * (72.0 / 18.0), 16.0, s * (68.0 / 18.0))
 	voxel_gi.position = Vector3(0.0, 5.0, 0.0)
 	host.add_child(voxel_gi)
@@ -222,8 +229,8 @@ func _build_stadium() -> void:
 	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
 	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
 	var s := GameConfig.FIELD_SCALE
-	var stand_gap_z := s * (5.0 / 18.0)
-	var stand_gap_x := s * (5.5 / 18.0)
+	var stand_gap_z := s * STAND_GAP_Z
+	var stand_gap_x := s * STAND_GAP_X
 	_add_ground_apron()
 	_add_perimeter_walls()
 	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - stand_gap_z), Vector3(field_x * 2.5, 2.0, s * (5.0 / 18.0)), mf.materials.concrete)
@@ -333,11 +340,13 @@ func _add_crowd(field_x: float, field_z: float) -> void:
 	var cross_half := s * (5.0 / 18.0) * 0.5
 	# center, long-axis length, long axis is x?, sign toward the pitch on the cross
 	# axis, dominant team colour for this stand.
+	var gap_z := s * STAND_GAP_Z
+	var gap_x := s * STAND_GAP_X
 	var stands := [
-		{"center": Vector3(0.0, 1.0, -field_z - s * (5.0 / 18.0)), "long": field_x * 2.5, "along_x": true, "to_pitch": 1.0, "team": "red"},
-		{"center": Vector3(0.0, 1.0, field_z + s * (5.0 / 18.0)), "long": field_x * 2.5, "along_x": true, "to_pitch": -1.0, "team": "blue"},
-		{"center": Vector3(-field_x - s * (5.5 / 18.0), 1.0, 0.0), "long": field_z * 2.0, "along_x": false, "to_pitch": 1.0, "team": "mix"},
-		{"center": Vector3(field_x + s * (5.5 / 18.0), 1.0, 0.0), "long": field_z * 2.0, "along_x": false, "to_pitch": 1.0, "team": "mix"},
+		{"center": Vector3(0.0, 1.0, -field_z - gap_z), "long": field_x * 2.5, "along_x": true, "to_pitch": 1.0, "team": "red"},
+		{"center": Vector3(0.0, 1.0, field_z + gap_z), "long": field_x * 2.5, "along_x": true, "to_pitch": -1.0, "team": "blue"},
+		{"center": Vector3(-field_x - gap_x, 1.0, 0.0), "long": field_z * 2.0, "along_x": false, "to_pitch": 1.0, "team": "mix"},
+		{"center": Vector3(field_x + gap_x, 1.0, 0.0), "long": field_z * 2.0, "along_x": false, "to_pitch": 1.0, "team": "mix"},
 	]
 	# East stand sits on +x, so its pitch direction is -x.
 	stands[3]["to_pitch"] = -1.0

@@ -66,7 +66,7 @@ func _ready() -> void:
 	stadium_builder._build_stadium()
 	# Build and bake the GI probe over the static scene now — the procedural meshes
 	# are already in the tree, and baking here (before players are created) keeps the
-	# dynamic players out of the probe so only the static neon hoardings/scoreboard
+	# dynamic players out of the probe so only the static neon hoardings
 	# bounce coloured light onto the pitch.
 	stadium_builder._build_gi()
 	stadium_builder._bake_gi()
@@ -211,13 +211,3 @@ func _new_root(root_name: String) -> Node3D:
 	node.name = root_name
 	add_child(node)
 	return node
-
-# ---------------------------------------------------------------------------
-# Audio
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Menus
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Settings persistence
-# ---------------------------------------------------------------------------

@@ -103,7 +103,6 @@ func _create_glb_player_visual(state: PlayerState):
 		state.animation_player = anim
 	else:
 		push_warning("Player GLB animations unavailable; using static mesh.")
-	state.visual_model = model
 	state.set_visual_state("gk_idle" if state.role == GameConfig.PlayerRole.GOALKEEPER else "idle")
 	root.add_child(_jersey_label(2.3))
 	return root
@@ -191,7 +190,7 @@ func _find_animation_player(node: Node) -> AnimationPlayer:
 func _place_glb_model(model: Node3D) -> void:
 	model.scale = Vector3.ONE
 	model.position = Vector3.ZERO
-	var bounds := _node_local_bounds(model)
+	var bounds := mf.subtree_local_aabb(model)
 	if bounds.size.length() <= 0.001 or bounds.size.y <= 0.001:
 		model.scale = Vector3.ONE * GameConfig.PLAYER_GLB_SCALE
 		model.position = Vector3(0.0, GameConfig.PLAYER_GLB_Y_OFFSET, 0.0)
@@ -226,42 +225,6 @@ func _apply_team_tint_recursive(node: Node, tint: Color) -> void:
 func _is_uniform_mesh(node_name: StringName) -> bool:
 	var n := String(node_name).to_lower()
 	return n.contains("shirt") or n.contains("short") or n.contains("sock")
-
-func _node_local_bounds(root: Node3D) -> AABB:
-	var state := [false, Vector3.ZERO, Vector3.ZERO]
-	for child: Node in root.get_children():
-		_accumulate_local_bounds(child, Transform3D.IDENTITY, state)
-	if not state[0]:
-		return AABB()
-	return AABB(state[1], state[2] - state[1])
-
-func _accumulate_local_bounds(node: Node, parent_xform: Transform3D, state: Array) -> void:
-	var current := parent_xform
-	if node is Node3D:
-		current = parent_xform * (node as Node3D).transform
-	if node is MeshInstance3D:
-		var mesh_instance := node as MeshInstance3D
-		var aabb: AABB = mesh_instance.get_aabb()
-		for i in 8:
-			var local_point: Vector3 = current * _aabb_corner(aabb, i)
-			if not state[0]:
-				state[1] = local_point
-				state[2] = local_point
-				state[0] = true
-			else:
-				var min_v: Vector3 = state[1]
-				var max_v: Vector3 = state[2]
-				state[1] = Vector3(minf(min_v.x, local_point.x), minf(min_v.y, local_point.y), minf(min_v.z, local_point.z))
-				state[2] = Vector3(maxf(max_v.x, local_point.x), maxf(max_v.y, local_point.y), maxf(max_v.z, local_point.z))
-	for child: Node in node.get_children():
-		_accumulate_local_bounds(child, current, state)
-
-func _aabb_corner(aabb: AABB, index: int) -> Vector3:
-	return aabb.position + Vector3(
-		aabb.size.x if index & 1 else 0.0,
-		aabb.size.y if index & 2 else 0.0,
-		aabb.size.z if index & 4 else 0.0
-	)
 
 func _jersey_label(height: float) -> Label3D:
 	var label := Label3D.new()

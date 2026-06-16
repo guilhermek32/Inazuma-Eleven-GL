@@ -9,6 +9,10 @@ extends RefCounted
 
 var sim
 
+# Distances within this margin (normalized field units) count as a tie and are broken
+# by player index, so two near-equidistant players never both elect themselves presser.
+const PRESS_TIE_EPS := 0.02
+
 func _update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float, is_opponent: bool) -> void:
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
@@ -139,7 +143,12 @@ func _is_presser(team: Array[PlayerState], player_idx: int, press_limit: int) ->
 	for i in team.size():
 		if i == player_idx or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
 			continue
-		if Vector2(team[i].x - sim.ball.x, team[i].y - sim.ball.y).length() < my_dist:
+		var d := Vector2(team[i].x - sim.ball.x, team[i].y - sim.ball.y).length()
+		# Strictly nearer wins; on a near-tie the lower index wins. Without this both
+		# equidistant players think they're the sole presser, charge the ball together
+		# and deadlock flanking it just out of capture range.
+		var ahead := d < my_dist - PRESS_TIE_EPS or (absf(d - my_dist) <= PRESS_TIE_EPS and i < player_idx)
+		if ahead:
 			closer += 1
 			if closer >= press_limit:
 				return false

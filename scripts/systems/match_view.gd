@@ -62,7 +62,7 @@ func _add_ball_glb(root: Node3D) -> bool:
 	if inst == null:
 		return false
 	inst.name = "BallMesh"
-	var aabb := _node_aabb(inst)
+	var aabb := material_factory.subtree_local_aabb(inst)
 	var largest := maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
 	if largest > 0.0001:
 		inst.scale = Vector3.ONE * (GameConfig.BALL_RADIUS * 2.0 / largest)
@@ -70,22 +70,6 @@ func _add_ball_glb(root: Node3D) -> bool:
 	inst.position = -(aabb.position + aabb.size * 0.5) * inst.scale.x
 	root.add_child(inst)
 	return true
-
-## Union of all MeshInstance3D AABBs under `node`, in `node`'s local space.
-## Walks local transforms so it works on a subtree not yet inside the scene tree.
-func _node_aabb(node: Node3D, accum := Transform3D.IDENTITY, state := {"result": AABB(), "has_any": false}) -> AABB:
-	var here := accum * node.transform if node.get_parent() != null else accum
-	if node is MeshInstance3D and (node as MeshInstance3D).mesh != null:
-		var local := here * (node as MeshInstance3D).mesh.get_aabb()
-		if state.has_any:
-			state.result = (state.result as AABB).merge(local)
-		else:
-			state.result = local
-			state.has_any = true
-	for child in node.get_children():
-		if child is Node3D:
-			_node_aabb(child as Node3D, here, state)
-	return state.result
 
 func _add_fallback_ball(root: Node3D) -> void:
 	var mesh := material_factory._mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)

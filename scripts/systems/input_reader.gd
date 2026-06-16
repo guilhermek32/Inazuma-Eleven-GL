@@ -34,12 +34,6 @@ func _read_keyboard_input(snap: InputSnapshot, allow: bool) -> void:
 func _read_gamepad_input(snap: InputSnapshot, device: int, allow: bool) -> void:
 	var dead := 0.22
 	snap.axis = Vector2.ZERO
-	if device < 0:
-		snap.shoot_prev = snap.shoot_held
-		snap.shoot_held = false
-		snap.aim_vec = Vector2.ZERO
-		snap.aim_absolute = false
-		return
 	var move := Vector2(Input.get_joy_axis(device, JOY_AXIS_LEFT_X), -Input.get_joy_axis(device, JOY_AXIS_LEFT_Y))
 	if allow and move.length() > dead:
 		snap.axis = move if move.length() <= 1.0 else move.normalized()

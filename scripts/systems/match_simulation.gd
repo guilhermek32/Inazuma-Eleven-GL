@@ -25,6 +25,15 @@ var switch_candidate_index: Array[int] = [-1, -1]
 # 1P setup: red on keyboard+mouse, blue on the AI. The setup screen overwrites it.
 var team_device := [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
 
+# Player handed the ball at kickoff: the central midfielder in the 4-3-3
+# (GK=0, DEF=1-4, MID=5-7, ATT=8-10).
+const KICKOFF_PLAYER_INDEX := 5
+
+# How much nearer (normalized field units) a rival must be than the current switch
+# candidate before the "next player" ring moves to them. Hysteresis stops the ring
+# flickering between two near-equidistant players.
+const SWITCH_CANDIDATE_HYSTERESIS := 0.05
+
 func team_is_human(t: int) -> bool:
 	return team_device[t] != GameConfig.DEVICE_AI
 
@@ -101,7 +110,7 @@ func _reset_game(kickoff_side: int) -> void:
 	_reset_players(team_red)
 	_reset_players(team_blue)
 	var kickoff_team := _team_index_for_side(kickoff_side)
-	_set_owner(kickoff_team, 5)
+	_set_owner(kickoff_team, KICKOFF_PLAYER_INDEX)
 	var owner := _owner_player()
 	if owner != null:
 		owner.x = 0.0
@@ -210,9 +219,17 @@ func _handle_user_selection(team: Array[PlayerState], team_idx: int, snap: Input
 		var candidate := switch_candidate_index[team_idx]
 		if candidate >= 0:
 			selected_index[team_idx] = candidate
-	# Every frame: recompute the switch candidate = nearest outfield player that
-	# is NOT the currently selected one.
+	# Every frame: recompute the switch candidate = nearest outfield player that is NOT
+	# the currently selected one. Hysteresis keeps the current candidate unless a rival
+	# is clearly nearer, so two near-equidistant players can't flip the ring (and bounce
+	# control) every frame.
 	var cur := selected_index[team_idx]
+	var incumbent := switch_candidate_index[team_idx]
+	var incumbent_dist := INF
+	if incumbent >= 0 and incumbent != cur and team[incumbent].role != GameConfig.PlayerRole.GOALKEEPER:
+		incumbent_dist = Vector2(team[incumbent].x - ball.x, team[incumbent].y - ball.y).length()
+	else:
+		incumbent = -1
 	var best := -1
 	var best_dist := INF
 	for i in team.size():
@@ -222,6 +239,9 @@ func _handle_user_selection(team: Array[PlayerState], team_idx: int, snap: Input
 		if d < best_dist:
 			best_dist = d
 			best = i
+	# Stay on the incumbent unless the new nearest beats it by more than the margin.
+	if incumbent >= 0 and best_dist >= incumbent_dist - SWITCH_CANDIDATE_HYSTERESIS:
+		best = incumbent
 	switch_candidate_index[team_idx] = best
 
 func _nearest_user_player(team: Array[PlayerState], team_idx: int) -> int:
@@ -261,9 +281,9 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 		elif snap.shoot_prev:
 			_kick_from_player(p, _aim_target(snap, p), p.kick_power, true)
 	else:
+		# Not the ball carrier: never charging a kick.
 		p.kick_power = 0.0
-		if ball.owner_team != team_idx or ball.owner_index != player_idx:
-			ball.charging_power = 0.0
+		ball.charging_power = 0.0
 
 func _aim_target(snap: InputSnapshot, p: PlayerState) -> Vector2:
 	if snap.aim_absolute:
@@ -290,6 +310,9 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.charging_power = 0.0
 	p.kick_power = 0.0
 	p.hold_timer = 0.0
+	# Brief self-stun after kicking: _try_capture_ball ignores stunned players, so
+	# this — not the small forward nudge below — is what stops the kicker instantly
+	# re-grabbing their own pass/shot.
 	p.stun_timer = 0.25 if power > 0.5 else 0.1
 	_clear_owner()
 	ball.x += ball.vx * 0.025

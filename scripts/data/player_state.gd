@@ -2,8 +2,8 @@ class_name PlayerState
 extends RefCounted
 
 ## Plain gameplay state for a single player (no scene-tree behaviour).
-## Positions live in the normalized 2D field space; `node`/`visual_model`/
-## `animation_player` link to the 3D representation built by PlayerFactory.
+## Positions live in the normalized 2D field space; `node`/`animation_player`
+## link to the 3D representation built by PlayerFactory.
 
 var x := 0.0
 var y := 0.0
@@ -19,10 +19,8 @@ var stun_timer := 0.0
 var kick_power := 0.0
 var hold_timer := 0.0
 var is_moving := false
-var is_targeting_ball := false
 var node: Node3D
 var uses_glb := false
-var visual_model: Node3D
 var animation_player: AnimationPlayer
 var visual_state := ""
 var action_timer := 0.0
