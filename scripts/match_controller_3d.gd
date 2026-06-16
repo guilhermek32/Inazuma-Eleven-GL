@@ -163,7 +163,7 @@ func _update_time_scale() -> void:
 func _begin_special_shot(info: Dictionary) -> void:
 	slowmo_until_ms = Time.get_ticks_msec() + SLOWMO_MS
 	Engine.time_scale = SLOWMO_SCALE
-	hud.show_banner("%s!" % info.name, info.color, 1.1)
+	hud.show_banner("%s!" % info.name, info.color, 1.1, false)
 	audio._play_special()
 
 func _begin_goal_celebration(scorer: int) -> void:

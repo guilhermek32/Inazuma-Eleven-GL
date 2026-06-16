@@ -69,29 +69,38 @@ func _build_ui() -> void:
 	timer_label.add_theme_constant_override("outline_size", 5)
 	col.add_child(timer_label)
 
-	# Big transient centre-screen banner shared by special-shot names, GOAL! and HALF TIME.
+	# Transient on-screen banner, full screen width so the text always centres horizontally.
+	# Size and vertical position are set per message in show_banner().
 	banner = Label.new()
 	banner.name = "BannerLabel"
-	banner.set_anchors_preset(Control.PRESET_CENTER)
+	banner.anchor_left = 0.0
+	banner.anchor_right = 1.0
+	banner.offset_left = 0.0
+	banner.offset_right = 0.0
 	banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	banner.grow_vertical = Control.GROW_DIRECTION_BOTH
 	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	banner.add_theme_font_size_override("font_size", 86)
 	banner.add_theme_color_override("font_color", Color.WHITE)
 	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
-	banner.add_theme_constant_override("outline_size", 10)
 	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	banner.visible = false
 	ui_layer.add_child(banner)
 
-## Flashes a large centred message (e.g. "FIRE TORNADO!", "GOAL!") for `duration`
-## seconds; the per-frame _tick_banner() pops it in and fades it out.
-func show_banner(text: String, color: Color, duration: float) -> void:
+## Flashes a message for `duration` seconds; _tick_banner() pops it in and fades it out.
+## `big` = large and centred (GOAL!/HALF TIME, shown while play is frozen); otherwise a
+## small caption up near the scoreboard so the live ball/players stay visible (special
+## shot names, which fire during slow-mo play).
+func show_banner(text: String, color: Color, duration: float, big := true) -> void:
 	if banner == null:
 		return
 	banner.text = text
 	banner.add_theme_color_override("font_color", color)
+	banner.add_theme_font_size_override("font_size", 84 if big else 40)
+	banner.add_theme_constant_override("outline_size", 10 if big else 6)
+	var vfrac := 0.46 if big else 0.17
+	banner.anchor_top = vfrac
+	banner.anchor_bottom = vfrac
 	banner.modulate = Color(1.0, 1.0, 1.0, 1.0)
 	_banner_dur = maxf(0.1, duration)
 	_banner_timer = _banner_dur

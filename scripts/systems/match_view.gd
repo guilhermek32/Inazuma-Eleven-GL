@@ -178,7 +178,9 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
 
 func _facing_vector(p: PlayerState) -> Vector3:
-	if not p.is_moving:
+	# Keepers always face the ball (they shuffle sideways along their line, so using the
+	# movement direction would point them along the goal instead of at the pitch).
+	if not p.is_moving or p.role == GameConfig.PlayerRole.GOALKEEPER:
 		var to_ball := Vector2(sim.ball.x - p.x, sim.ball.y - p.y)
 		if to_ball.length_squared() > 0.0001:
 			return Vector3(to_ball.x, 0.0, -to_ball.y).normalized()
