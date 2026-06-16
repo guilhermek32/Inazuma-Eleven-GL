@@ -39,6 +39,8 @@ const PLAYER_GLB_SCALE := 1.14
 const PLAYER_GLB_Y_OFFSET := 0.0
 const PLAYER_GLB_YAW_OFFSET := 0.0
 const PLAYER_ASSET_DIR := "res://assets/obj_3d_player/"
+const BALL_GLB := "res://assets/ball_trionda/fifa_trionda_ball_world_cup_2026.glb"
+const BALL_RADIUS := 0.228
 const PLAYER_MESH_FILE := "Ch38_nonPBR.glb"
 const PLAYER_GLTF_ANIM := "Armature|mixamo.com|Layer0"
 # Friendly state name -> [animation scene, should loop]. All share the Ch38 mixamorig5 rig,
