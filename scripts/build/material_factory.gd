@@ -63,7 +63,6 @@ func _build_materials() -> void:
 		_emission_material(Color(1.0, 0.78, 0.10), 1.0),
 	]
 	materials.ad_text_colors = [Color(0.08, 0.10, 0.25), Color.WHITE, Color.WHITE, Color(0.15, 0.10, 0.02)]
-	materials.scoreboard = _emission_material(Color(0.1, 0.85, 0.25), 1.4)
 
 	# --- Player kits: Burley diffuse + rim so players separate from dark backdrop ---
 	materials.player_red = _material(Color(0.85, 0.05, 0.03), 0.58)

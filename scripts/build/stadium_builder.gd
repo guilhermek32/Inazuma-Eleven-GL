@@ -224,7 +224,6 @@ func _build_stadium() -> void:
 	var s := GameConfig.FIELD_SCALE
 	var stand_gap_z := s * (5.0 / 18.0)
 	var stand_gap_x := s * (5.5 / 18.0)
-	var score_gap := s * (7.8 / 18.0)
 	_add_ground_apron()
 	_add_perimeter_walls()
 	_add_stand("NorthStand", Vector3(0.0, 1.0, -field_z - stand_gap_z), Vector3(field_x * 2.5, 2.0, s * (5.0 / 18.0)), mf.materials.concrete)
@@ -233,7 +232,6 @@ func _build_stadium() -> void:
 	_add_stand("EastStand", Vector3(field_x + stand_gap_x, 1.0, 0.0), Vector3(s * (5.0 / 18.0), 2.0, field_z * 2.0), mf.materials.concrete)
 	_add_crowd(field_x, field_z)
 	_add_hoardings()
-	_add_scoreboard(Vector3(0.0, 5.2, -field_z - score_gap))
 
 func _add_ground_apron() -> void:
 	var apron := mf._mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
@@ -325,29 +323,6 @@ func _add_stand(stand_name: String, pos: Vector3, size: Vector3, mat: StandardMa
 		var seat := mf._mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
 		seat.mesh.size = Vector3(tier_mesh.mesh.size.x * 0.94, 0.08, tier_mesh.mesh.size.z * 0.72)
 		stand.add_child(seat)
-
-func _add_scoreboard(pos: Vector3) -> void:
-	var board := mf._mesh("Scoreboard", BoxMesh.new(), mf.materials.scoreboard, pos)
-	board.mesh.size = Vector3(5.2, 1.8, 0.18)
-	stadium_root.add_child(board)
-	board.look_at(Vector3.ZERO, Vector3.UP)
-	for pole_side in [-1.0, 1.0]:
-		var pole := mf._mesh("ScoreboardPole%d" % pole_side, CylinderMesh.new(), mf.materials.metal_dark, Vector3(pole_side * 1.8, pos.y * 0.5 - 0.45, pos.z))
-		pole.mesh.height = pos.y - 0.9
-		pole.mesh.top_radius = 0.09
-		pole.mesh.bottom_radius = 0.11
-		stadium_root.add_child(pole)
-	# Omni point source: green LCD spill onto the stand — demonstrates coloured
-	# point light with distance attenuation, paired with the emissive surface.
-	var spill := OmniLight3D.new()
-	spill.name = "ScoreboardSpill"
-	spill.light_color = Color(0.15, 1.0, 0.35)
-	spill.light_energy = 1.2
-	spill.omni_range = 9.0
-	spill.omni_attenuation = 2.0
-	spill.shadow_enabled = false
-	spill.position = pos + Vector3(0.0, 0.5, 0.8)
-	stadium_root.add_child(spill)
 
 # Dense 3D crowd via two MultiMeshes (bodies + heads). Each spectator is a capsule
 # body (team kit colour) topped by a sphere head (skin tone), placed in raked banks
