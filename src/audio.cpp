@@ -67,6 +67,8 @@ bool AudioPlayer::playOneShot(const std::string& audioPath, float volume) {
         return false;
     }
 
+    cleanupFinishedSounds();
+
     ma_sound* sound = new ma_sound;
     if (ma_sound_init_from_file(engine, audioPath.c_str(), MA_SOUND_FLAG_STREAM, nullptr, nullptr, sound) != MA_SUCCESS) {
         delete sound;
@@ -81,12 +83,31 @@ bool AudioPlayer::playOneShot(const std::string& audioPath, float volume) {
         delete sound;
         return false;
     }
+
+    activeSounds.push_back(sound);
     
     return true;
 }
 
+void AudioPlayer::cleanupFinishedSounds() {
+    for (int i = static_cast<int>(activeSounds.size()) - 1; i >= 0; --i) {
+        ma_sound* sound = activeSounds[i];
+        if (ma_sound_at_end(sound)) {
+            ma_sound_uninit(sound);
+            delete sound;
+            activeSounds.erase(activeSounds.begin() + i);
+        }
+    }
+}
+
 // Stops sounds and releases all allocated audio objects.
 void AudioPlayer::shutdown() {
+    for (ma_sound* sound : activeSounds) {
+        ma_sound_uninit(sound);
+        delete sound;
+    }
+    activeSounds.clear();
+
     if (track != nullptr) {
         ma_sound_uninit(track);
         delete track;

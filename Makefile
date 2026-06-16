@@ -6,7 +6,7 @@ OBJ_DIR := obj
 
 CXXFLAGS := -std=c++17 -Iinclude -MMD -MP
 CFLAGS := -Iinclude -MMD -MP
-LDFLAGS := -lglfw -lGL -ldl
+LDFLAGS := -lglfw -lGL -ldl -pthread -lm
 
 CPP_SOURCES := \
 	src/main.cpp \

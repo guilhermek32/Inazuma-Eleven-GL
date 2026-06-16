@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://c2guqgrrc87gu"]
+
+[ext_resource type="Script" uid="uid://bc8gj1c6k8geu" path="res://scripts/match_controller_3d.gd" id="1_match3d"]
+
+[node name="Main3D" type="Node3D" unique_id=2094401203]
+script = ExtResource("1_match3d")

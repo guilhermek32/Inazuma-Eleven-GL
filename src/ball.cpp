@@ -85,11 +85,13 @@ void Ball::update(float deltaTime) {
     trailX.push_back(x);
     trailY.push_back(y);
     
+    float speed = std::sqrt(dx * dx + dy * dy);
+
     // Check if owner is moving
     bool ownerMoving = (owner != nullptr && owner->isMoving);
     
-    // Update animation frame for normal ball - ONLY if owner is moving
-    if (ownerMoving && !isSuperShot && !normalTextures.empty()) {
+    // Update animation frame while carried or rolling.
+    if ((ownerMoving || speed > 0.0001f) && !isSuperShot && !normalTextures.empty()) {
         animationTimer += deltaTime;
         // Change frame every 0.15 seconds (faster animation)
         if (animationTimer >= 0.15f) {
@@ -100,15 +102,14 @@ void Ball::update(float deltaTime) {
         // Super shot ball doesn't animate, but rotates faster
         animationTimer = 0.0f;
         currentFrame = 0;
-    } else if (!ownerMoving) {
+    } else if (!ownerMoving && speed <= 0.0001f) {
         // Reset animation timer if owner stops moving
         animationTimer = 0.0f;
     }
     
-    // Calculate rotation based on velocity - ONLY if owner is moving
+    // Calculate rotation based on velocity.
     // Rotation speed is proportional to ball speed
-    float speed = std::sqrt(dx * dx + dy * dy);
-    if (ownerMoving && speed > 0.0001f) {
+    if (speed > 0.0001f) {
         // Rotate based on velocity direction and magnitude
         // Speed multiplier: increases significantly when ball is kicked
         float rotationSpeedMultiplier = 5400.0f;  // Base rotation speed (was 3600.0f)
@@ -118,9 +119,9 @@ void Ball::update(float deltaTime) {
             rotationSpeedMultiplier = 9000.0f;  // Much faster when kicked
         }
         
-        rotation += speed * rotationSpeedMultiplier;  // Degrees per frame
+        rotation += speed * rotationSpeedMultiplier * deltaTime * 60.0f;
         if (rotation > 360.0f) {
-            rotation -= 360.0f;
+            rotation = std::fmod(rotation, 360.0f);
         }
         
         // Apply Magnus effect (curve) based on spin
@@ -138,9 +139,10 @@ void Ball::update(float deltaTime) {
             dy += perpY * deltaTime;
             
             // Spin decays over time (friction on spin)
-            spinX *= 0.98f;
-            spinY *= 0.98f;
-            spinZ *= 0.98f;
+            float spinDecay = std::pow(0.98f, deltaTime * 60.0f);
+            spinX *= spinDecay;
+            spinY *= spinDecay;
+            spinZ *= spinDecay;
         }
     }
 }
