@@ -94,7 +94,6 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 		var aim_y := clampf(randf_range(-0.06, 0.06), -GameConfig.GOAL_HALF_WIDTH * 0.8, GameConfig.GOAL_HALF_WIDTH * 0.8)
 		var power := 0.65 + randf() * 0.2
 		sim._kick_from_player(p, Vector2(target_goal_x, aim_y), power, false)
-		sim.ball.is_super_shot = dist_to_goal < 0.35
 		return
 	# Pass when a good option is available.
 	if randf() < 1.8 * decision_scale * delta:

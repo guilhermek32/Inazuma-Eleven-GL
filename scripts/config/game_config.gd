@@ -57,6 +57,19 @@ const PLAYER_ANIM_FILES := {
 const MATCH_LENGTHS := [120.0, 300.0, 600.0]
 const SETTINGS_PATH := "user://settings.cfg"
 
+# Inazuma-style named special shots ("hissatsu"). A fully-charged user shot (or an
+# occasional powerful AI shot) "evolves" into one of these: the ball gains an elemental
+# aura/light in this colour, a brief slow-mo plays and the name flashes on the HUD.
+const SPECIAL_SHOT_CHARGE := 0.85   # charge fraction a user shot needs to evolve
+const SPECIAL_SHOTS := [
+	{"name": "FIRE TORNADO", "color": Color(1.0, 0.45, 0.08)},
+	{"name": "ETERNAL BLIZZARD", "color": Color(0.45, 0.85, 1.0)},
+	{"name": "THE EARTHQUAKE", "color": Color(0.62, 0.85, 0.28)},
+	{"name": "LIGHTNING ACCEL", "color": Color(1.0, 0.95, 0.25)},
+	{"name": "TIDAL WAVE", "color": Color(0.20, 0.55, 1.0)},
+	{"name": "DARK PHOENIX", "color": Color(0.85, 0.25, 0.95)},
+]
+
 ## Projects a normalized 2D field point onto the 3D world. Note the sign flip:
 ## 2D +y maps to 3D -z.
 static func to_3d(p: Vector2, height := 0.0) -> Vector3:

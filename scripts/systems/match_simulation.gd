@@ -24,6 +24,12 @@ var switch_candidate_index: Array[int] = [-1, -1]
 # Device driving each team (index 0 = red, 1 = blue). Defaults reproduce the old
 # 1P setup: red on keyboard+mouse, blue on the AI. The setup screen overwrites it.
 var team_device := [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
+# Side that kicks off after the current goal celebration: set when a goal is scored,
+# consumed by the controller once it ends the goal freeze and resets for kickoff.
+var pending_kickoff_side := 0
+# One-shot event: a named special shot was just fired this frame. The controller reads
+# it after step() to flash the name, dip into slow-mo and play the SFX, then clears it.
+var pending_special := {}
 
 # Player handed the ball at kickoff: the central midfielder in the 4-3-3
 # (GK=0, DEF=1-4, MID=5-7, ATT=8-10).
@@ -43,7 +49,10 @@ func step(delta: float) -> int:
 	_update_kickoff(delta)
 	var scorer := _update_ball(delta)
 	if scorer != 0:
+		# Goal: fire confetti/whistle now, but skip the team updates this frame and leave
+		# the field reset to the controller once the goal-celebration freeze ends.
 		view._trigger_goal(scorer)
+		return scorer
 	var red_user := team_is_human(0)
 	var blue_user := team_is_human(1)
 	_update_team(team_red, team_blue, 0, red_user, not red_user, delta)
@@ -105,6 +114,8 @@ func _reset_game(kickoff_side: int) -> void:
 	ball.is_super_shot = false
 	ball.charging_power = 0.0
 	ball.spin = 0.0
+	ball.special_name = ""
+	ball.special_color = Color(1.0, 1.0, 1.0)
 	view.reset_trail()
 	_clear_owner()
 	_reset_players(team_red)
@@ -184,13 +195,14 @@ func _update_ball(delta: float) -> int:
 	return 0
 
 func _score_goal_against(goal_side: int) -> int:
+	# Record the score and which side kicks off next, but defer the field reset: the
+	# controller freezes play for the goal celebration and resets when the freeze ends.
 	var scoring_side := -goal_side
+	pending_kickoff_side = goal_side
 	if _team_index_for_side(scoring_side) == 0:
 		score_left += 1
-		_reset_game(goal_side)
 		return -1
 	score_right += 1
-	_reset_game(goal_side)
 	return 1
 
 func _update_team(team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, is_user_team: bool, is_opponent: bool, delta: float) -> void:
@@ -306,7 +318,22 @@ func _kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot:
 	ball.spin = final_power * 8.0
 	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
-	ball.is_super_shot = user_shot and power > 0.5 and dist_to_goal < 0.65
+	# A fully-charged shot toward goal "evolves" into a named special: the user always
+	# triggers one at full charge; the AI does so on a coin-flip when it shoots that hard.
+	var is_named := power >= GameConfig.SPECIAL_SHOT_CHARGE and dist_to_goal < 0.95 and (user_shot or randf() < 0.5)
+	ball.is_super_shot = is_named or (power > 0.5 and dist_to_goal < 0.55)
+	if is_named:
+		var pick: Dictionary = GameConfig.SPECIAL_SHOTS[randi() % GameConfig.SPECIAL_SHOTS.size()]
+		ball.special_name = pick.name
+		ball.special_color = pick.color
+		pending_special = {"name": pick.name, "color": pick.color, "team": p.team_index}
+		# A special carries extra venom and spin.
+		ball.vx *= 1.18
+		ball.vy *= 1.18
+		ball.spin *= 1.4
+	else:
+		ball.special_name = ""
+		ball.special_color = Color(1.0, 1.0, 1.0)
 	ball.charging_power = 0.0
 	p.kick_power = 0.0
 	p.hold_timer = 0.0
@@ -366,6 +393,8 @@ func _set_owner(team_idx: int, player_idx: int) -> void:
 	ball.owner_index = player_idx
 	ball.is_super_shot = false
 	ball.charging_power = 0.0
+	ball.special_name = ""
+	ball.special_color = Color(1.0, 1.0, 1.0)
 
 func _clear_owner() -> void:
 	ball.owner_team = -1

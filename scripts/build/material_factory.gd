@@ -99,6 +99,12 @@ func _build_materials() -> void:
 	materials.confetti_red = _emission_material(Color(1.0, 0.08, 0.04), 1.1)
 	materials.confetti_blue = _emission_material(Color(0.08, 0.28, 1.0), 1.1)
 	materials.confetti_gold = _emission_material(Color(1.0, 0.84, 0.12), 1.3)
+	# Elemental aura around the ball during a named special shot. Additive + unshaded so
+	# it glows independent of scene lighting; its albedo/emission are recoloured per shot.
+	materials.special_aura = _emission_material(Color(1.0, 0.55, 0.12, 0.6), 4.0)
+	materials.special_aura.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	materials.special_aura.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	materials.special_aura.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 func _mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	var node := MeshInstance3D.new()

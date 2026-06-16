@@ -40,6 +40,15 @@ var prev_menu_state := GameConfig.GameState.MENU
 var match_time := 0.0
 var current_half := 1
 var halftime_pause := 0.0
+# Goal celebration: play freezes for this long after a goal (confetti + GOAL! banner +
+# crowd roar) before the field resets for the next kickoff.
+var goal_freeze := 0.0
+# Wall-clock (ms) at which a special-shot slow-mo should end; 0 when not slowed.
+var slowmo_until_ms := 0
+
+const GOAL_FREEZE_TIME := 2.2
+const SLOWMO_SCALE := 0.45
+const SLOWMO_MS := 520
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
@@ -121,18 +130,51 @@ func _ready() -> void:
 	print("Inazuma Eleven 3D environment ready")
 
 func _process(delta: float) -> void:
+	_update_time_scale()
 	if game_state == GameConfig.GameState.PLAYING:
 		if halftime_pause > 0.0:
 			halftime_pause = maxf(0.0, halftime_pause - delta)
+		elif goal_freeze > 0.0:
+			goal_freeze = maxf(0.0, goal_freeze - delta)
+			if goal_freeze <= 0.0:
+				sim._reset_game(sim.pending_kickoff_side)
 		else:
 			input_reader.read(sim.inputs, sim.team_device, sim.kickoff_timer)
-			sim.step(delta)
-			_update_match_clock(delta)
+			var scorer := sim.step(delta)
+			if not sim.pending_special.is_empty():
+				_begin_special_shot(sim.pending_special)
+				sim.pending_special = {}
+			if scorer != 0:
+				_begin_goal_celebration(scorer)
+			else:
+				_update_match_clock(delta)
 		view._update_visuals(delta)
 	elif game_state == GameConfig.GameState.MATCH_SETUP:
 		setup.update(delta)
 	view._update_confetti(delta)
 	hud.update(sim.score_left, sim.score_right, game_state, sim.kickoff_timer, settings.half_length, match_time, current_half)
+
+## Restores normal speed once a special-shot slow-mo has run its (wall-clock) course.
+func _update_time_scale() -> void:
+	if slowmo_until_ms > 0 and Time.get_ticks_msec() >= slowmo_until_ms:
+		slowmo_until_ms = 0
+		Engine.time_scale = 1.0
+
+func _begin_special_shot(info: Dictionary) -> void:
+	slowmo_until_ms = Time.get_ticks_msec() + SLOWMO_MS
+	Engine.time_scale = SLOWMO_SCALE
+	hud.show_banner("%s!" % info.name, info.color, 1.1)
+	audio._play_special()
+
+func _begin_goal_celebration(scorer: int) -> void:
+	# Drop any active slow-mo, then freeze the field for the celebration. The confetti
+	# and whistle already fired inside sim.step(); the reset waits for the freeze to end.
+	Engine.time_scale = 1.0
+	slowmo_until_ms = 0
+	goal_freeze = GOAL_FREEZE_TIME
+	var col := Color(0.88, 0.20, 0.16) if scorer < 0 else Color(0.22, 0.38, 0.96)
+	hud.show_banner("GOAL!", col, GOAL_FREEZE_TIME)
+	audio._play_crowd_roar()
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -152,6 +194,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _set_game_state(next: int) -> void:
+	# Never leave the world in slow-mo when we step out of live play (pause, menus, …).
+	if next != GameConfig.GameState.PLAYING:
+		Engine.time_scale = 1.0
+		slowmo_until_ms = 0
 	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	var leaving_setup := game_state == GameConfig.GameState.MATCH_SETUP and next != GameConfig.GameState.MATCH_SETUP
@@ -169,6 +215,9 @@ func _start_match() -> void:
 	match_time = 0.0
 	current_half = 1
 	halftime_pause = 0.0
+	goal_freeze = 0.0
+	Engine.time_scale = 1.0
+	slowmo_until_ms = 0
 	sim._set_default_ends()
 	sim._reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
@@ -184,6 +233,7 @@ func _update_match_clock(delta: float) -> void:
 			sim._switch_ends()
 			sim._reset_game(1)
 			audio._play_whistle()
+			hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
 		else:
 			_end_match()
 

@@ -9,8 +9,11 @@ var ui_layer: CanvasLayer
 var panel: PanelContainer
 var score_label: Label
 var timer_label: Label
+var banner: Label
 var _last_score := Vector2i(-1, -1)
 var _flash := 0.0
+var _banner_timer := 0.0
+var _banner_dur := 0.0
 
 func _build_ui() -> void:
 	ui_layer = CanvasLayer.new()
@@ -66,6 +69,48 @@ func _build_ui() -> void:
 	timer_label.add_theme_constant_override("outline_size", 5)
 	col.add_child(timer_label)
 
+	# Big transient centre-screen banner shared by special-shot names, GOAL! and HALF TIME.
+	banner = Label.new()
+	banner.name = "BannerLabel"
+	banner.set_anchors_preset(Control.PRESET_CENTER)
+	banner.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	banner.grow_vertical = Control.GROW_DIRECTION_BOTH
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	banner.add_theme_font_size_override("font_size", 86)
+	banner.add_theme_color_override("font_color", Color.WHITE)
+	banner.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.9))
+	banner.add_theme_constant_override("outline_size", 10)
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner.visible = false
+	ui_layer.add_child(banner)
+
+## Flashes a large centred message (e.g. "FIRE TORNADO!", "GOAL!") for `duration`
+## seconds; the per-frame _tick_banner() pops it in and fades it out.
+func show_banner(text: String, color: Color, duration: float) -> void:
+	if banner == null:
+		return
+	banner.text = text
+	banner.add_theme_color_override("font_color", color)
+	banner.modulate = Color(1.0, 1.0, 1.0, 1.0)
+	_banner_dur = maxf(0.1, duration)
+	_banner_timer = _banner_dur
+	banner.visible = true
+
+func _tick_banner() -> void:
+	if banner == null or _banner_timer <= 0.0:
+		return
+	_banner_timer = maxf(0.0, _banner_timer - get_process_delta_time())
+	if _banner_timer <= 0.0:
+		banner.visible = false
+		return
+	var t := _banner_timer / _banner_dur            # 1 at start -> 0 at end
+	var appear := clampf((1.0 - t) / 0.18, 0.0, 1.0)
+	var fade := clampf(t / 0.35, 0.0, 1.0)
+	banner.pivot_offset = banner.size * 0.5
+	banner.scale = Vector2.ONE * (0.72 + 0.28 * appear + 0.05 * sin(_banner_timer * 16.0))
+	banner.modulate.a = minf(appear, fade)
+
 func _panel_style() -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
 	box.bg_color = Color(0.06, 0.07, 0.10, 0.82)
@@ -96,6 +141,7 @@ func _team_chip(text: String, color: Color) -> Label:
 func update(score_left: int, score_right: int, game_state: int, kickoff_timer: float, half_length: float, match_time: float, current_half: int) -> void:
 	if panel == null:
 		return
+	_tick_banner()
 	panel.visible = game_state == GameConfig.GameState.PLAYING or game_state == GameConfig.GameState.PAUSED
 	if not panel.visible:
 		return

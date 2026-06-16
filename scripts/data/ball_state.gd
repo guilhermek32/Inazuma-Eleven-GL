@@ -15,5 +15,10 @@ var owner_index := -1
 var is_super_shot := false
 var charging_power := 0.0
 var spin := 0.0
+# Active named special shot (Inazuma "hissatsu"): name flashed on the HUD and the
+# element colour driving the ball's aura/light/trail. Empty name = ordinary ball.
+var special_name := ""
+var special_color := Color(1.0, 1.0, 1.0)
 var node: Node3D
 var light: OmniLight3D
+var aura: MeshInstance3D

@@ -48,8 +48,16 @@ func _create_ball() -> void:
 	glow.light_energy = 0.0
 	glow.omni_range = 5.0
 	root.add_child(glow)
+	# Elemental aura orb, hidden until a named special shot is in flight.
+	var aura := material_factory._mesh("SpecialAura", SphereMesh.new(), material_factory.materials.special_aura, Vector3.ZERO)
+	(aura.mesh as SphereMesh).radius = GameConfig.BALL_RADIUS * 2.2
+	(aura.mesh as SphereMesh).height = GameConfig.BALL_RADIUS * 4.4
+	aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	aura.visible = false
+	root.add_child(aura)
 	sim.ball.node = root
 	sim.ball.light = glow
+	sim.ball.aura = aura
 	ball_root.add_child(root)
 
 ## Loads the Trionda GLB, scales it to the match ball size and centres it on the
@@ -184,10 +192,36 @@ func _update_ball_visual(delta: float) -> void:
 	sim.ball.node.position = GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), visual_height)
 	sim.ball.node.rotate_x(speed * delta * 14.0)
 	sim.ball.node.rotate_z(sim.ball.spin * delta)
-	sim.ball.light.light_energy = sim.ball.charging_power * 4.0 + (2.5 if sim.ball.is_super_shot and speed > 0.05 else 0.0)
-	sim.ball.light.light_color = Color(1.0, 0.82, 0.20) if sim.ball.charging_power > 0.5 or sim.ball.is_super_shot else Color(0.1, 0.7, 1.0)
+	_update_special_aura(speed)
 	_update_ball_trail(speed)
 	_update_grass_marks(speed, delta)
+
+## Drives the ball light, elemental aura orb and trail tint. A named special shot in
+## flight glows in its element colour; otherwise it falls back to the charge/super-shot
+## light cue and the trail to its default gold.
+func _update_special_aura(speed: float) -> void:
+	var special := sim.ball.special_name != "" and speed > 0.03
+	var trail_mat := material_factory.materials.trail as StandardMaterial3D
+	if special:
+		var col: Color = sim.ball.special_color
+		var pulse := 1.0 + 0.16 * sin(Time.get_ticks_msec() * 0.02)
+		sim.ball.light.light_color = col
+		sim.ball.light.light_energy = 6.5 * pulse
+		if sim.ball.aura != null:
+			sim.ball.aura.visible = true
+			sim.ball.aura.scale = Vector3.ONE * pulse
+			var aura_mat := material_factory.materials.special_aura as StandardMaterial3D
+			aura_mat.albedo_color = Color(col.r, col.g, col.b, 0.6)
+			aura_mat.emission = col
+		if trail_mat != null:
+			trail_mat.albedo_color = Color(col.r, col.g, col.b, 0.5)
+	else:
+		if sim.ball.aura != null:
+			sim.ball.aura.visible = false
+		sim.ball.light.light_energy = sim.ball.charging_power * 4.0 + (2.5 if sim.ball.is_super_shot and speed > 0.05 else 0.0)
+		sim.ball.light.light_color = Color(1.0, 0.82, 0.20) if sim.ball.charging_power > 0.5 or sim.ball.is_super_shot else Color(0.1, 0.7, 1.0)
+		if trail_mat != null:
+			trail_mat.albedo_color = Color(1.0, 0.86, 0.25, 0.36)
 
 ## Presses a fresh decal into the turf once the ball has rolled MARK_SPACING from the
 ## last mark, then fades every live mark toward transparent over MARK_LIFETIME.
