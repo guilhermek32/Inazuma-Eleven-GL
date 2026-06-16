@@ -164,6 +164,8 @@ func show_for_state(state: int) -> void:
 		(menu_panels[key] as Control).visible = false
 	var active: Control = null
 	match state:
+		GameConfig.GameState.INTRO:
+			pass
 		GameConfig.GameState.MENU:
 			active = menu_panels.main
 		GameConfig.GameState.HOWTO:

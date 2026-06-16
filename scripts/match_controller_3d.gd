@@ -30,12 +30,13 @@ var hud: MatchHud
 var audio: AudioManager
 var settings: SettingsStore
 var menu: MenuManager
+var intro: IntroManager
 var setup: MatchSetup
 var sim: MatchSimulation
 var view: MatchView
 
 # Game state / flow
-var game_state := GameConfig.GameState.MENU
+var game_state := GameConfig.GameState.INTRO
 var prev_menu_state := GameConfig.GameState.MENU
 var match_time := 0.0
 var current_half := 1
@@ -119,6 +120,13 @@ func _ready() -> void:
 	menu.controller = self
 	menu.settings = settings
 	menu._build_menus()
+	intro = IntroManager.new()
+	add_child(intro)
+	intro.controller = self
+	intro.settings = settings
+	intro.audio = audio
+	intro._build()
+	intro.finished.connect(func() -> void: _set_game_state(GameConfig.GameState.MENU))
 	setup = MatchSetup.new()
 	add_child(setup)
 	setup.controller = self
@@ -126,7 +134,8 @@ func _ready() -> void:
 	setup.build()
 	sim._reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
-	_set_game_state(GameConfig.GameState.MENU)
+	_set_game_state(GameConfig.GameState.INTRO)
+	intro.start()
 	print("Inazuma Eleven 3D environment ready")
 
 func _process(delta: float) -> void:
@@ -177,6 +186,8 @@ func _begin_goal_celebration(scorer: int) -> void:
 	audio._play_crowd_roar()
 
 func _input(event: InputEvent) -> void:
+	if game_state == GameConfig.GameState.INTRO:
+		return
 	if event.is_action_pressed("ui_cancel"):
 		match game_state:
 			GameConfig.GameState.PLAYING:
