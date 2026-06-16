@@ -5,6 +5,10 @@ extends Node
 ## transforms/animations, ball position/spin/trail, the broadcast camera and the
 ## goal celebration confetti. Reads from `sim`; never mutates gameplay state.
 
+# Smoothed per-frame speed (field units) a keeper must exceed to read as strafing rather
+# than holding position; below it the keeper plays the idle stance.
+const GK_STRAFE_MIN_VEL := 0.0012
+
 var sim: MatchSimulation
 var material_factory: MaterialFactory
 var audio: AudioManager
@@ -164,9 +168,11 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
 		if p.role == GameConfig.PlayerRole.GOALKEEPER:
-			p.set_visual_state("run" if p.is_moving else "gk_idle")
+			p.set_visual_state(_gk_move_state(p))
 		else:
 			p.set_visual_state("run" if p.is_moving else "idle")
+	p.prev_x = p.x
+	p.prev_y = p.y
 	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
 	var t := p.team_index
 	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
@@ -176,6 +182,25 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
+
+# Picks the forward-facing sideways shuffle clip for a moving keeper. The keeper always
+# faces the ball, so the shuffle is purely lateral: the sign of (facing × movement) tells
+# us whether it is stepping to its own left or right along the goal line.
+func _gk_move_state(p: PlayerState) -> String:
+	# Keepers micro-adjust toward their target every frame, so `is_moving` is almost always
+	# true. Drive the shuffle off the actual per-frame displacement instead: below a small
+	# threshold they stand still (gk_idle), above it they strafe in the stepped direction.
+	var move := Vector2(p.x - p.prev_x, p.y - p.prev_y)
+	p.gk_vel_x = lerp(p.gk_vel_x, move.x, 0.25)
+	p.gk_vel_y = lerp(p.gk_vel_y, move.y, 0.25)
+	var vel := Vector2(p.gk_vel_x, p.gk_vel_y)
+	if vel.length() < GK_STRAFE_MIN_VEL:
+		return "gk_idle"
+	var facing := Vector2(sim.ball.x - p.x, sim.ball.y - p.y)
+	if facing.length_squared() < 0.0001:
+		return "gk_idle"
+	var cross := facing.x * vel.y - facing.y * vel.x
+	return "gk_left" if cross > 0.0 else "gk_right"
 
 func _facing_vector(p: PlayerState) -> Vector3:
 	# Keepers always face the ball (they shuffle sideways along their line, so using the

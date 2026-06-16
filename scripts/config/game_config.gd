@@ -49,6 +49,9 @@ const PLAYER_ANIM_FILES := {
 	"idle": ["offensive idle.glb", true],
 	"run": ["anim/playe_run.tscn", true],
 	"gk_idle": ["goalkeeper idle.glb", true],
+	# Forward-facing sideways strafe shuffles for the keeper (move left / right along the line).
+	"gk_left": ["gk_anim/gk left.glb", true],
+	"gk_right": ["gk_anim/gk right.glb", true],
 	"kick": ["kick soccerball.glb", false],
 	"receive": ["receive soccerball.glb", false],
 	"tackle": ["soccer tackle.glb", false],

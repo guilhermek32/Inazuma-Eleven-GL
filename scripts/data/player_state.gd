@@ -25,6 +25,13 @@ var animation_player: AnimationPlayer
 var visual_state := ""
 var action_timer := 0.0
 var jersey_number := 0
+# Last visual-frame position and a smoothed velocity, used to derive the keeper's strafe
+# direction. The smoothing cancels out the per-frame oscillation around its target so a
+# keeper that is merely holding position reads as standing still.
+var prev_x := 0.0
+var prev_y := 0.0
+var gk_vel_x := 0.0
+var gk_vel_y := 0.0
 
 func _init(p_x: float, p_y: float, p_speed: float, p_side: int, p_role: int) -> void:
 	x = p_x
