@@ -19,11 +19,23 @@ var confetti: Array[VfxParticle] = []
 var celebration_timer := 0.0
 var camera_look := Vector3.ZERO
 
+# Ball grass-trail: a ring buffer of Decal nodes pressed into the turf along the
+# ball's ground path, each fading over MARK_LIFETIME seconds.
+const MARK_LIFETIME := 7.0
+const MARK_SPACING := 0.3   # world units the ball must travel before a new mark
+var grass_marks: Array[Decal] = []
+var grass_mark_life: PackedFloat32Array = []
+var grass_mark_index := 0
+var last_mark_pos := Vector2(1.0e9, 1.0e9)
+
 ## Clears the ball trail (called by the simulation on kickoff / goal reset).
 func reset_trail() -> void:
 	ball_trail_points.clear()
 	for trail in ball_trail:
 		trail.visible = false
+	# Drop the spacing anchor so the ball's teleport on reset can't smear a streak;
+	# existing grass marks keep fading naturally.
+	last_mark_pos = Vector2(1.0e9, 1.0e9)
 
 func _create_ball() -> void:
 	var root := Node3D.new()
@@ -91,6 +103,26 @@ func _create_ball_trail() -> void:
 		trail.visible = false
 		vfx_root.add_child(trail)
 		ball_trail.append(trail)
+
+## Pool of decals that mark the grass where the ball rolls. Built once; all hidden
+## until the ball moves over them. Shared albedo/normal textures (one each).
+func _create_grass_marks() -> void:
+	var albedo := material_factory._decal_albedo_texture()
+	var normal := material_factory._decal_normal_texture()
+	for i in 48:
+		var mark := Decal.new()
+		mark.name = "GrassMark%d" % i
+		mark.texture_albedo = albedo
+		mark.texture_normal = normal
+		mark.size = Vector3(1.45, 0.8, 1.45)   # x/z footprint, y = downward projection depth
+		mark.albedo_mix = 1.0
+		mark.upper_fade = 0.3
+		mark.lower_fade = 0.3
+		mark.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		mark.visible = false
+		vfx_root.add_child(mark)
+		grass_marks.append(mark)
+		grass_mark_life.append(0.0)
 
 func _update_visuals(delta: float) -> void:
 	for i in sim.team_red.size():
@@ -171,6 +203,35 @@ func _update_ball_visual(delta: float) -> void:
 	sim.ball.light.light_energy = sim.ball.charging_power * 4.0 + (2.5 if sim.ball.is_super_shot and speed > 0.05 else 0.0)
 	sim.ball.light.light_color = Color(1.0, 0.82, 0.20) if sim.ball.charging_power > 0.5 or sim.ball.is_super_shot else Color(0.1, 0.7, 1.0)
 	_update_ball_trail(speed)
+	_update_grass_marks(speed, delta)
+
+## Presses a fresh decal into the turf once the ball has rolled MARK_SPACING from the
+## last mark, then fades every live mark toward transparent over MARK_LIFETIME.
+func _update_grass_marks(speed: float, delta: float) -> void:
+	if grass_marks.is_empty():
+		return
+	var ground := GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.3)
+	var ground2 := Vector2(ground.x, ground.z)
+	if speed > 0.04 and ground2.distance_to(last_mark_pos) > MARK_SPACING:
+		last_mark_pos = ground2
+		var mark := grass_marks[grass_mark_index]
+		var sc := randf_range(0.85, 1.3)
+		mark.position = ground
+		mark.rotation = Vector3(0.0, randf() * TAU, 0.0)
+		mark.size = Vector3(1.45 * sc, 0.8, 1.45 * sc)
+		mark.visible = true
+		grass_mark_life[grass_mark_index] = MARK_LIFETIME
+		grass_mark_index = (grass_mark_index + 1) % grass_marks.size()
+	for i in grass_marks.size():
+		var life := grass_mark_life[i]
+		if life <= 0.0:
+			continue
+		life -= delta
+		grass_mark_life[i] = life
+		if life <= 0.0:
+			grass_marks[i].visible = false
+		else:
+			grass_marks[i].modulate.a = clampf(life / MARK_LIFETIME, 0.0, 1.0)
 
 func _update_ball_trail(speed: float) -> void:
 	if speed > 0.04:

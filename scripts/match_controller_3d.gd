@@ -97,6 +97,7 @@ func _ready() -> void:
 	sim._create_teams()
 	view._create_ball()
 	view._create_ball_trail()
+	view._create_grass_marks()
 	audio = AudioManager.new()
 	add_child(audio)
 	audio._build_audio()

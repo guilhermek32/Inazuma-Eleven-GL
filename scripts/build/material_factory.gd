@@ -223,6 +223,53 @@ func _net_texture(size := 64, step := 8) -> Texture2D:
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
+# Soft radial scuff for the ball's grass trail: a dark pressed-turf disc that fades
+# to fully transparent at the rim, with a little noise so repeated marks vary.
+func _decal_albedo_texture(size := 64) -> Texture2D:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0xDEC0
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var c := float(size - 1) * 0.5
+	for y in size:
+		for x in size:
+			var dx := (float(x) - c) / c
+			var dy := (float(y) - c) / c
+			var d := sqrt(dx * dx + dy * dy)
+			var a := pow(clampf(1.0 - d, 0.0, 1.0), 1.25)
+			a *= 1.0 + rng.randf_range(-0.15, 0.15)
+			# Lighter, desaturated pressed-turf so the streak reads against dark night
+			# grass (bent blades catch the floodlights, like a mow stripe).
+			var shade := 1.0 + rng.randf_range(-0.12, 0.12)
+			img.set_pixel(x, y, Color(0.34 * shade, 0.45 * shade, 0.24 * shade, clampf(a, 0.0, 1.0)))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+# Radial dimple normal map for the trail decal: the turf is pressed down where the
+# ball rolled, so surface normals tilt inward — this is what perturbs ("interferes
+# with") the grass normals under the decal so the floodlights catch the dent.
+func _decal_normal_texture(size := 64, strength := 4.0) -> Texture2D:
+	var c := float(size - 1) * 0.5
+	var h := PackedFloat32Array()
+	h.resize(size * size)
+	for y in size:
+		for x in size:
+			var dx := (float(x) - c) / c
+			var dy := (float(y) - c) / c
+			var d := clampf(sqrt(dx * dx + dy * dy), 0.0, 1.0)
+			h[y * size + x] = -(1.0 - smoothstep(0.0, 1.0, d))   # dent: low centre, flat rim
+	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
+	for y in size:
+		for x in size:
+			var h00 := h[y * size + x]
+			var h10 := h[y * size + mini(x + 1, size - 1)]
+			var h01 := h[mini(y + 1, size - 1) * size + x]
+			var gx := (h10 - h00) * strength
+			var gy := (h01 - h00) * strength
+			var n := Vector3(-gx, -gy, 1.0).normalized()
+			img.set_pixel(x, y, Color(n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, n.z * 0.5 + 0.5))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 # Procedural tangent-space normal map from a blurred random height field.
 # Finite-difference gradients → (R, G, B) = (Nx*0.5+0.5, Ny*0.5+0.5, Nz*0.5+0.5).
 # `strength` scales the gradient; higher = more pronounced surface bumps.
