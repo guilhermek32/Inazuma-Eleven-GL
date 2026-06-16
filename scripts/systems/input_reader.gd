@@ -7,16 +7,16 @@ extends RefCounted
 
 var camera_3d: Camera3D
 
-func read(inputs: Array, num_players: int, kickoff_timer: float) -> void:
+func read(inputs: Array, team_device: Array, kickoff_timer: float) -> void:
 	var allow := kickoff_timer <= 0.0
-	# Red (team 0) always uses keyboard+mouse. In 2P, blue uses the first connected controller.
-	_read_keyboard_input(inputs[0], allow)
-	if num_players == 2:
-		_read_gamepad_input(inputs[1], _first_connected_gamepad(), allow)
-
-func _first_connected_gamepad() -> int:
-	var pads := Input.get_connected_joypads()
-	return -1 if pads.size() == 0 else int(pads[0])
+	# Each team is driven by whatever device the setup screen assigned to it.
+	for t in 2:
+		var dev: int = team_device[t]
+		if dev == GameConfig.DEVICE_KBM:
+			_read_keyboard_input(inputs[t], allow)
+		elif dev >= 0:
+			_read_gamepad_input(inputs[t], dev, allow)
+		# DEVICE_AI: leave the snapshot untouched — the team runs on the AI.
 
 func _read_keyboard_input(snap: InputSnapshot, allow: bool) -> void:
 	snap.axis = Vector2.ZERO

@@ -30,13 +30,13 @@ var hud: MatchHud
 var audio: AudioManager
 var settings: SettingsStore
 var menu: MenuManager
+var setup: MatchSetup
 var sim: MatchSimulation
 var view: MatchView
 
 # Game state / flow
 var game_state := GameConfig.GameState.MENU
 var prev_menu_state := GameConfig.GameState.MENU
-var num_players := 1
 var match_time := 0.0
 var current_half := 1
 var halftime_pause := 0.0
@@ -103,6 +103,11 @@ func _ready() -> void:
 	menu.controller = self
 	menu.settings = settings
 	menu._build_menus()
+	setup = MatchSetup.new()
+	add_child(setup)
+	setup.controller = self
+	setup.sim = sim
+	setup.build()
 	sim._reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
@@ -113,10 +118,12 @@ func _process(delta: float) -> void:
 		if halftime_pause > 0.0:
 			halftime_pause = maxf(0.0, halftime_pause - delta)
 		else:
-			input_reader.read(sim.inputs, num_players, sim.kickoff_timer)
-			sim.step(delta, num_players)
+			input_reader.read(sim.inputs, sim.team_device, sim.kickoff_timer)
+			sim.step(delta)
 			_update_match_clock(delta)
-		view._update_visuals(delta, num_players)
+		view._update_visuals(delta)
+	elif game_state == GameConfig.GameState.MATCH_SETUP:
+		setup.update(delta)
 	view._update_confetti(delta)
 	hud.update(sim.score_left, sim.score_right, game_state, sim.kickoff_timer, settings.half_length, match_time, current_half)
 
@@ -129,15 +136,20 @@ func _input(event: InputEvent) -> void:
 				_set_game_state(GameConfig.GameState.PLAYING)
 			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
 				_set_game_state(prev_menu_state)
+			GameConfig.GameState.MATCH_SETUP:
+				_set_game_state(GameConfig.GameState.MENU)
 		get_viewport().set_input_as_handled()
 
 func _set_game_state(next: int) -> void:
 	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
+	var leaving_setup := game_state == GameConfig.GameState.MATCH_SETUP and next != GameConfig.GameState.MATCH_SETUP
 	game_state = next
 	view._set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
-	if next == GameConfig.GameState.MENU:
-		menu._refresh_two_player_availability()
+	if next == GameConfig.GameState.MATCH_SETUP:
+		setup.enter()
+	elif leaving_setup:
+		setup.exit()
 	menu.show_for_state(next)
 
 func _start_match() -> void:
@@ -175,8 +187,8 @@ func _end_match() -> void:
 	_set_game_state(GameConfig.GameState.FULLTIME)
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
-	if game_state == GameConfig.GameState.MENU:
-		menu._refresh_two_player_availability()
+	if game_state == GameConfig.GameState.MATCH_SETUP:
+		setup.enter()
 
 func _build_scene_roots() -> void:
 	pitch_root = _new_root("Pitch")

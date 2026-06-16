@@ -21,16 +21,24 @@ var kickoff_timer := 2.0
 var inputs := [InputSnapshot.new(), InputSnapshot.new()]
 var selected_index: Array[int] = [-1, -1]
 var switch_candidate_index: Array[int] = [-1, -1]
+# Device driving each team (index 0 = red, 1 = blue). Defaults reproduce the old
+# 1P setup: red on keyboard+mouse, blue on the AI. The setup screen overwrites it.
+var team_device := [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
+
+func team_is_human(t: int) -> bool:
+	return team_device[t] != GameConfig.DEVICE_AI
 
 ## Advances one frame: kickoff timer, ball physics + goal detection, then each
 ## team's update. Returns the scoring side (-1 left, +1 right, 0 none).
-func step(delta: float, num_players: int) -> int:
+func step(delta: float) -> int:
 	_update_kickoff(delta)
 	var scorer := _update_ball(delta)
 	if scorer != 0:
 		view._trigger_goal(scorer)
-	_update_team(team_red, team_blue, 0, true, false, delta)
-	_update_team(team_blue, team_red, 1, num_players == 2, num_players < 2, delta)
+	var red_user := team_is_human(0)
+	var blue_user := team_is_human(1)
+	_update_team(team_red, team_blue, 0, red_user, not red_user, delta)
+	_update_team(team_blue, team_red, 1, blue_user, not blue_user, delta)
 	return scorer
 
 func _create_teams() -> void:
@@ -99,10 +107,10 @@ func _reset_game(kickoff_side: int) -> void:
 		owner.x = 0.0
 		owner.y = 0.0
 	kickoff_timer = 2.0
-	# Start the user selection on the kickoff player (midfielder index 5 on red),
-	# or on whichever red player is nearest the ball if red is not kicking off.
-	selected_index[0] = _nearest_user_player(team_red, 0)
-	selected_index[1] = -1
+	# Each human team starts selecting whichever of its players is nearest the
+	# ball; AI teams keep no selection.
+	selected_index[0] = _nearest_user_player(team_red, 0) if team_is_human(0) else -1
+	selected_index[1] = _nearest_user_player(team_blue, 1) if team_is_human(1) else -1
 	switch_candidate_index[0] = -1
 	switch_candidate_index[1] = -1
 

@@ -9,7 +9,13 @@ extends RefCounted
 ## y in ±0.78); `to_3d()` projects those onto the Godot world.
 
 enum PlayerRole { GOALKEEPER, DEFENDER, MIDFIELDER, ATTACKER }
-enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME }
+enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME, MATCH_SETUP }
+
+# Device codes for per-team input assignment (see MatchSetup / InputReader).
+# A pad device id (>= 0, as returned by Input.get_connected_joypads) means that
+# gamepad drives the team; these two negatives are the special cases.
+const DEVICE_AI := -2    # no human assigned — the team runs on the AI
+const DEVICE_KBM := -1   # keyboard + mouse drives the team
 
 const FIELD_HALF_WIDTH := 0.98
 const FIELD_HALF_HEIGHT := 0.78

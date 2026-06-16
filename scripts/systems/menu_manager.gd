@@ -10,8 +10,6 @@ var controller
 var settings: SettingsStore
 var menu_layer: CanvasLayer
 var menu_panels := {}
-var play_2p_button: Button
-var play_2p_hint: Label
 var fulltime_label: Label
 
 func _build_menus() -> void:
@@ -75,13 +73,7 @@ func _build_main_menu() -> void:
 	var vb := _make_vbox(panel)
 	_make_title(vb, "INAZUMA ELEVEN", 72)
 	_make_title(vb, "GL", 32).add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	_make_button(vb, "Play - 1 Player", func() -> void: controller.num_players = 1; controller._start_match())
-	play_2p_button = _make_button(vb, "Play - 2 Players", func() -> void: controller.num_players = 2; controller._start_match())
-	play_2p_hint = Label.new()
-	play_2p_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	play_2p_hint.add_theme_font_size_override("font_size", 16)
-	play_2p_hint.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
-	vb.add_child(play_2p_hint)
+	_make_button(vb, "Play Now", func() -> void: controller._set_game_state(GameConfig.GameState.MATCH_SETUP))
 	_make_button(vb, "How to Play", func() -> void: controller._set_game_state(GameConfig.GameState.HOWTO))
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Quit", func() -> void: controller.get_tree().quit())
@@ -93,7 +85,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "1 PLAYER (keyboard + mouse)\nMove: W A S D\nAim: Mouse\nShoot: hold SPACE to charge, release to kick\nPass: E   Switch player: Q\n\n2 PLAYERS (keyboard + mouse vs controller)\nP1 Move: W A S D    Aim: Mouse    Shoot: SPACE    Pass: E    Switch: Q\nP2 Move: Left stick    Aim: Right stick\nP2 Shoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
+	text.text = "CHOOSE SIDES (Play Now)\nEach device moves its own chip: pad left stick / D-pad, keyboard A / D.\nLeft = RED, right = BLUE. One device per side; an empty side is the AI.\nPress START / Space to begin once a side is filled.\n\nKEYBOARD + MOUSE\nMove: W A S D    Aim: Mouse\nShoot: hold SPACE to charge, release to kick    Pass: E    Switch: Q\n\nCONTROLLER\nMove: Left stick    Aim: Right stick\nShoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: controller._set_game_state(controller.prev_menu_state))
 
@@ -165,14 +157,6 @@ func _make_volume_slider(getter: Callable, setter: Callable) -> HSlider:
 	slider.value = getter.call()
 	slider.value_changed.connect(func(v: float) -> void: setter.call(v); settings.apply_volumes(); settings.save())
 	return slider
-
-func _refresh_two_player_availability() -> void:
-	if play_2p_button == null:
-		return
-	var pads := Input.get_connected_joypads().size()
-	play_2p_button.disabled = pads < 1
-	if play_2p_hint != null:
-		play_2p_hint.text = "" if pads >= 1 else "Connect 1 controller for 2-player"
 
 ## Shows only the panel matching the given GameConfig.GameState (hides the rest).
 func show_for_state(state: int) -> void:

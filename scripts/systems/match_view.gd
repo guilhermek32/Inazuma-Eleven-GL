@@ -12,7 +12,6 @@ var ball_root: Node3D
 var vfx_root: Node3D
 var camera_rig: Node3D
 var camera_3d: Camera3D
-var num_players := 1
 
 var ball_trail: Array[MeshInstance3D] = []
 var ball_trail_points: Array[Vector3] = []
@@ -54,8 +53,7 @@ func _create_ball_trail() -> void:
 		vfx_root.add_child(trail)
 		ball_trail.append(trail)
 
-func _update_visuals(delta: float, p_num_players: int) -> void:
-	num_players = p_num_players
+func _update_visuals(delta: float) -> void:
 	for i in sim.team_red.size():
 		_update_player_visual(sim.team_red[i], sim.ball.owner_team == 0 and sim.ball.owner_index == i, delta)
 	for i in sim.team_blue.size():
@@ -81,8 +79,9 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
 	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
-	var is_selected := (p.team_index == 0 and player_index == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.selected_index[1])
-	var is_candidate := (p.team_index == 0 and player_index == sim.switch_candidate_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.switch_candidate_index[1])
+	var t := p.team_index
+	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
+	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
@@ -106,8 +105,9 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 		else:
 			p.set_visual_state("run" if p.is_moving else "idle")
 	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
-	var is_selected := (p.team_index == 0 and player_index == sim.selected_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.selected_index[1])
-	var is_candidate := (p.team_index == 0 and player_index == sim.switch_candidate_index[0]) or (p.team_index == 1 and num_players == 2 and player_index == sim.switch_candidate_index[1])
+	var t := p.team_index
+	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
+	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
