@@ -9,17 +9,18 @@ var materials := {}
 
 func _build_materials() -> void:
 	# Pre-bake procedural normal maps: tangent-space RGB from height-field gradients.
-	var grass_nrm := _normal_texture(1.5, 0x6752)
+	var grass_nrm := _normal_texture(2.5, 0x6752)
 	var concrete_nrm := _normal_texture(3.0, 0xC0FF)
 	var metal_nrm := _normal_texture(0.8, 0xFACE)
 
-	# --- Pitch surfaces ---
-	materials.grass = _material(Color.WHITE, 0.88, 0.0, _noise_texture(Color(0.10, 0.35, 0.13), 0.05), grass_nrm)
-	materials.grass.normal_scale = 0.35
+	# --- Pitch surfaces --- lower roughness so floodlights leave a turf sheen; the two
+	# tones are pushed apart so the alternating mow stripes read clearly on broadcast.
+	materials.grass = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.105, 0.40, 0.145)), grass_nrm)
+	materials.grass.normal_scale = 0.6
 	materials.grass.anisotropy_enabled = true   # directional sheen along mow stripes
 	materials.grass.anisotropy = 0.7
-	materials.grass_dark = _material(Color.WHITE, 0.88, 0.0, _noise_texture(Color(0.088, 0.315, 0.115), 0.05), grass_nrm)
-	materials.grass_dark.normal_scale = 0.35
+	materials.grass_dark = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.068, 0.27, 0.10)), grass_nrm)
+	materials.grass_dark.normal_scale = 0.6
 	materials.grass_dark.anisotropy_enabled = true
 	materials.grass_dark.anisotropy = 0.7
 	materials.line = _material(Color(0.95, 0.97, 0.92), 0.55)
@@ -43,12 +44,18 @@ func _build_materials() -> void:
 	materials.flag = _emission_material(Color(1.0, 0.85, 0.15), 0.8)
 	materials.seat_red = _material(Color(0.55, 0.06, 0.05), 0.65)
 	materials.seat_blue = _material(Color(0.04, 0.10, 0.55), 0.65)
+	materials.crowd = _crowd_material()
 
 	# --- Structural metal: poles, frames, hoarding rails ---
 	materials.metal_dark = _material(Color(0.20, 0.21, 0.22), 0.36, 0.80, null, metal_nrm)
 	materials.metal_dark.normal_scale = 0.28
 
 	materials.light_emission = _emission_material(Color(1.0, 0.94, 0.72), 3.5)
+	# Floodlight lamp cells: very bright cool white so the banks read as the
+	# brightest objects in the scene and bloom through the glow threshold.
+	materials.floodlamp = _emission_material(Color(0.90, 0.95, 1.0), 15.0)
+	# Lighter mast metal so the towers catch the moon/sky and stay visible at night.
+	materials.metal_mast = _material(Color(0.46, 0.49, 0.55), 0.4, 0.7, null)
 	materials.ad_panels = [
 		_emission_material(Color(0.92, 0.94, 0.98), 1.0),
 		_emission_material(Color(0.10, 0.30, 0.95), 1.0),
@@ -128,12 +135,71 @@ func _emission_material(color: Color, energy := 1.0) -> StandardMaterial3D:
 	mat.emission_energy_multiplier = energy
 	return mat
 
+# Crowd spectators rendered via MultiMesh: per-instance COLOR drives the albedo
+# (team kit / skin tone) and INSTANCE_CUSTOM.x carries a 0..1 phase that offsets the
+# instance vertically each frame for a subtle, out-of-sync idle bob.
+func _crowd_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+uniform float bob_amp = 0.06;
+uniform float bob_speed = 2.5;
+void vertex() {
+	float phase = INSTANCE_CUSTOM.x * 6.28318;
+	VERTEX.y += sin(TIME * bob_speed + phase) * bob_amp;
+}
+void fragment() {
+	ALBEDO = COLOR.rgb;
+	ROUGHNESS = 0.85;
+	METALLIC = 0.0;
+}
+"""
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	return mat
+
 func _checker_texture(a: Color, b: Color, size: int, cells: int) -> Texture2D:
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	for y in size:
 		for x in size:
 			var use_a := ((x / cells) + (y / cells)) % 2 == 0
 			img.set_pixel(x, y, a if use_a else b)
+	return ImageTexture.create_from_image(img)
+
+# Layered procedural turf albedo: low-frequency patch tone (worn/lush areas), a
+# high-frequency per-blade speckle, and faint vertical (mow-direction) banding so the
+# surface reads as blades catching light rather than flat noise.
+func _grass_texture(base: Color, size := 512) -> Texture2D:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 0x6A55
+	# Coarse patch field, bilinearly sampled for smooth large-scale tonal drift.
+	var patch := 16
+	var patch_field := PackedFloat32Array()
+	patch_field.resize((patch + 1) * (patch + 1))
+	for i in patch_field.size():
+		patch_field[i] = rng.randf_range(-0.10, 0.10)
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	for y in size:
+		for x in size:
+			# Bilinear patch lookup.
+			var fx := float(x) / float(size) * float(patch)
+			var fy := float(y) / float(size) * float(patch)
+			var ix := int(fx)
+			var iy := int(fy)
+			var tx := fx - float(ix)
+			var ty := fy - float(iy)
+			var p00 := patch_field[iy * (patch + 1) + ix]
+			var p10 := patch_field[iy * (patch + 1) + ix + 1]
+			var p01 := patch_field[(iy + 1) * (patch + 1) + ix]
+			var p11 := patch_field[(iy + 1) * (patch + 1) + ix + 1]
+			var patch_val := lerpf(lerpf(p00, p10, tx), lerpf(p01, p11, tx), ty)
+			# High-frequency per-blade speckle.
+			var blade := rng.randf_range(-0.07, 0.07)
+			# Faint vertical mow banding (blades lie along the stripe direction).
+			var band := sin(float(x) / float(size) * TAU * 24.0) * 0.025
+			var f := 1.0 + patch_val + blade + band
+			img.set_pixel(x, y, Color(base.r * f, base.g * f, base.b * f))
+	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 func _noise_texture(base: Color, variation: float, size := 128) -> Texture2D:

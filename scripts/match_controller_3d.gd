@@ -64,6 +64,12 @@ func _ready() -> void:
 	pitch_builder._build_pitch()
 	pitch_builder._build_goals()
 	stadium_builder._build_stadium()
+	# Build and bake the GI probe over the static scene now — the procedural meshes
+	# are already in the tree, and baking here (before players are created) keeps the
+	# dynamic players out of the probe so only the static neon hoardings/scoreboard
+	# bounce coloured light onto the pitch.
+	stadium_builder._build_gi()
+	stadium_builder._bake_gi()
 	hud = MatchHud.new()
 	add_child(hud)
 	hud._build_ui()
