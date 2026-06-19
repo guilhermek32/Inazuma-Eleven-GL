@@ -8,6 +8,11 @@ extends RefCounted
 var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard
 var ai_speed_mult := 1.0
 var ai_decision_mult := 1.0
+var camera_angle := 1          # 0 Low, 1 Broadcast, 2 High, 3 Top-down
+var cam_height_mult := 1.0     # derived from camera_angle in _apply_settings()
+var cam_dist_mult := 1.0
+var camera_distance := 1       # 0 Close, 1 Normal, 2 Far, 3 Very Far
+var cam_zoom_mult := 1.0       # derived from camera_distance in _apply_settings()
 var half_length := 120.0       # seconds per half
 var fullscreen := false
 var vol_master := 0.9
@@ -26,6 +31,19 @@ func _apply_settings() -> void:
 		0: ai_speed_mult = 0.80; ai_decision_mult = 0.5
 		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0
 		2: ai_speed_mult = 1.25; ai_decision_mult = 2.0
+	# Camera presets: higher height_mult + lower dist_mult => steeper, more top-down angle.
+	match camera_angle:
+		0: cam_height_mult = 0.66; cam_dist_mult = 1.12   # Low / cinematic
+		1: cam_height_mult = 1.0; cam_dist_mult = 1.0     # Broadcast (default)
+		2: cam_height_mult = 1.45; cam_dist_mult = 0.82   # High
+		3: cam_height_mult = 2.2; cam_dist_mult = 0.42    # Top-down
+	# Distance/zoom: scales height + distance together, so it moves the camera nearer/
+	# farther along its view without changing the angle preset above.
+	match camera_distance:
+		0: cam_zoom_mult = 0.8     # Close
+		1: cam_zoom_mult = 1.0     # Normal
+		2: cam_zoom_mult = 1.25    # Far
+		3: cam_zoom_mult = 1.55    # Very Far
 	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
 	DisplayServer.window_set_mode(mode)
 	apply_volumes()
@@ -36,6 +54,8 @@ func _load_settings() -> void:
 		difficulty = cfg.get_value("game", "difficulty", difficulty)
 		half_length = cfg.get_value("game", "half_length", half_length)
 		fullscreen = cfg.get_value("video", "fullscreen", fullscreen)
+		camera_angle = cfg.get_value("video", "camera_angle", camera_angle)
+		camera_distance = cfg.get_value("video", "camera_distance", camera_distance)
 		vol_master = cfg.get_value("audio", "master", vol_master)
 		vol_music = cfg.get_value("audio", "music", vol_music)
 		vol_sfx = cfg.get_value("audio", "sfx", vol_sfx)
@@ -46,6 +66,8 @@ func _save_settings() -> void:
 	cfg.set_value("game", "difficulty", difficulty)
 	cfg.set_value("game", "half_length", half_length)
 	cfg.set_value("video", "fullscreen", fullscreen)
+	cfg.set_value("video", "camera_angle", camera_angle)
+	cfg.set_value("video", "camera_distance", camera_distance)
 	cfg.set_value("audio", "master", vol_master)
 	cfg.set_value("audio", "music", vol_music)
 	cfg.set_value("audio", "sfx", vol_sfx)

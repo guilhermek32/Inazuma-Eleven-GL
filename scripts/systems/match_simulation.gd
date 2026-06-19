@@ -24,16 +24,23 @@ var switch_candidate_index: Array[int] = [-1, -1]
 # Device driving each team (index 0 = red, 1 = blue). Defaults reproduce the old
 # 1P setup: red on keyboard+mouse, blue on the AI. The setup screen overwrites it.
 var team_device := [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
+# Per-team formation (index into GameConfig.FORMATIONS) and kit colours
+# (shirt/shorts/boots), chosen on the Choose Sides screen. 0 = Time A, 1 = Time B.
+var team_formation := [GameConfig.DEFAULT_FORMATION, GameConfig.DEFAULT_FORMATION]
+var team_kit := [
+	{"shirt": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_A.shirt].color,
+	 "shorts": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_A.shorts].color,
+	 "boots": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_A.boots].color},
+	{"shirt": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_B.shirt].color,
+	 "shorts": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_B.shorts].color,
+	 "boots": GameConfig.KIT_PALETTE[GameConfig.DEFAULT_KIT_B.boots].color},
+]
 # Side that kicks off after the current goal celebration: set when a goal is scored,
 # consumed by the controller once it ends the goal freeze and resets for kickoff.
 var pending_kickoff_side := 0
 # One-shot event: a named special shot was just fired this frame. The controller reads
 # it after step() to flash the name, dip into slow-mo and play the SFX, then clears it.
 var pending_special := {}
-
-# Player handed the ball at kickoff: the central midfielder in the 4-3-3
-# (GK=0, DEF=1-4, MID=5-7, ATT=8-10).
-const KICKOFF_PLAYER_INDEX := 5
 
 # How much nearer (normalized field units) a rival must be than the current switch
 # candidate before the "next player" ring moves to them. Hysteresis stops the ring
@@ -60,49 +67,39 @@ func step(delta: float) -> int:
 	return scorer
 
 func _create_teams() -> void:
+	# Re-runnable: drop existing player nodes so a fresh formation/kit can be built.
+	for child in players_root.get_children():
+		players_root.remove_child(child)
+		child.queue_free()
 	team_red.clear()
 	team_blue.clear()
 	var s := 0.2
 	var gk_speed := 0.32
-	_add_player(team_red, -GameConfig.FIELD_BOUNDARY_X, 0.00, gk_speed, -1, GameConfig.PlayerRole.GOALKEEPER)
-	_add_player(team_red, -0.65, 0.25, s, -1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_red, -0.65, -0.25, s, -1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_red, -0.60, 0.50, s, -1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_red, -0.60, -0.50, s, -1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_red, -0.35, 0.00, s, -1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.35, 0.30, s, -1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.35, -0.30, s, -1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_red, -0.10, 0.00, s, -1, GameConfig.PlayerRole.ATTACKER)
-	_add_player(team_red, -0.10, 0.40, s, -1, GameConfig.PlayerRole.ATTACKER)
-	_add_player(team_red, -0.10, -0.40, s, -1, GameConfig.PlayerRole.ATTACKER)
-	_add_player(team_blue, GameConfig.FIELD_BOUNDARY_X, 0.00, gk_speed, 1, GameConfig.PlayerRole.GOALKEEPER)
-	_add_player(team_blue, 0.65, 0.25, s, 1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.65, -0.25, s, 1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.60, 0.50, s, 1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.60, -0.50, s, 1, GameConfig.PlayerRole.DEFENDER)
-	_add_player(team_blue, 0.35, 0.00, s, 1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.35, 0.30, s, 1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.35, -0.30, s, 1, GameConfig.PlayerRole.MIDFIELDER)
-	_add_player(team_blue, 0.10, 0.00, s, 1, GameConfig.PlayerRole.ATTACKER)
-	_add_player(team_blue, 0.10, 0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
-	_add_player(team_blue, 0.10, -0.40, s, 1, GameConfig.PlayerRole.ATTACKER)
-	# Classic 4-3-3 jersey numbering: centre attacker wears 10 (the star number).
-	# GK=1, DEF=2-5, MID=6-8, ATT-centre=10, ATT-right=9, ATT-left=11.
-	var jersey := [1, 2, 3, 4, 5, 6, 7, 8, 10, 9, 11]
-	for i in team_red.size():
-		team_red[i].jersey_number = jersey[i]
-		var lbl := team_red[i].node.get_node_or_null("JerseyNumber") as Label3D
-		if lbl:
-			lbl.text = str(jersey[i])
-	for i in team_blue.size():
-		team_blue[i].jersey_number = jersey[i]
-		var lbl := team_blue[i].node.get_node_or_null("JerseyNumber") as Label3D
-		if lbl:
-			lbl.text = str(jersey[i])
+	var form_a: Dictionary = GameConfig.FORMATIONS[team_formation[0]]
+	var form_b: Dictionary = GameConfig.FORMATIONS[team_formation[1]]
+	for entry in form_a.players:
+		var role: int = entry[0]
+		var spd := gk_speed if role == GameConfig.PlayerRole.GOALKEEPER else s
+		_add_player(team_red, entry[1], entry[2], spd, -1, role, team_kit[0])
+	for entry in form_b.players:
+		var role: int = entry[0]
+		var spd := gk_speed if role == GameConfig.PlayerRole.GOALKEEPER else s
+		# Mirror x so the blue team lines up on the opposite half.
+		_add_player(team_blue, -float(entry[1]), entry[2], spd, 1, role, team_kit[1])
+	_assign_jerseys(team_red)
+	_assign_jerseys(team_blue)
 
-func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, side: int, role: int) -> void:
+func _assign_jerseys(team: Array[PlayerState]) -> void:
+	# GK wears 1; the rest are numbered by their slot in the formation list.
+	for i in team.size():
+		team[i].jersey_number = i + 1
+		var lbl := team[i].node.get_node_or_null("JerseyNumber") as Label3D
+		if lbl:
+			lbl.text = str(i + 1)
+
+func _add_player(team: Array[PlayerState], px: float, py: float, speed: float, side: int, role: int, kit: Dictionary) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)
-	state.node = player_factory._create_player_visual(state)
+	state.node = player_factory._create_player_visual(state, kit)
 	players_root.add_child(state.node)
 	team.append(state)
 
@@ -121,7 +118,7 @@ func _reset_game(kickoff_side: int) -> void:
 	_reset_players(team_red)
 	_reset_players(team_blue)
 	var kickoff_team := _team_index_for_side(kickoff_side)
-	_set_owner(kickoff_team, KICKOFF_PLAYER_INDEX)
+	_set_owner(kickoff_team, _kickoff_index(kickoff_team))
 	var owner := _owner_player()
 	if owner != null:
 		owner.x = 0.0
@@ -149,6 +146,17 @@ func _team_index_for_side(side: int) -> int:
 	if not team_red.is_empty() and team_red[0].side == side:
 		return 0
 	return 1
+
+func _kickoff_index(team_idx: int) -> int:
+	# Player handed the ball at kickoff: first midfielder, else first attacker.
+	var team := team_red if team_idx == 0 else team_blue
+	for i in team.size():
+		if team[i].role == GameConfig.PlayerRole.MIDFIELDER:
+			return i
+	for i in team.size():
+		if team[i].role == GameConfig.PlayerRole.ATTACKER:
+			return i
+	return mini(1, team.size() - 1)
 
 func _update_kickoff(delta: float) -> void:
 	if kickoff_timer > 0.0:
@@ -395,6 +403,10 @@ func _set_owner(team_idx: int, player_idx: int) -> void:
 	ball.charging_power = 0.0
 	ball.special_name = ""
 	ball.special_color = Color(1.0, 1.0, 1.0)
+	# Immediately snap the human selection to the new ball carrier so the player
+	# doesn't have to press Q/L1 to regain control after winning a tackle.
+	if team_is_human(team_idx):
+		selected_index[team_idx] = player_idx
 
 func _clear_owner() -> void:
 	ball.owner_team = -1
@@ -424,6 +436,9 @@ func _flip_player_end(p: PlayerState) -> void:
 	p.x *= -1.0
 	p.facing_x = -float(p.side)
 	p.facing_y = 0.0
+	# NOTE: team_index is intentionally NOT updated here. It records which array
+	# (team_red=0, team_blue=1) the player lives in — that never changes. Only
+	# `side` reflects which goal the player is currently attacking.
 
 func _set_default_ends() -> void:
 	for p in team_red:

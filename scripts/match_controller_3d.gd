@@ -137,7 +137,12 @@ func _process(delta: float) -> void:
 		elif goal_freeze > 0.0:
 			goal_freeze = maxf(0.0, goal_freeze - delta)
 			if goal_freeze <= 0.0:
-				sim._reset_game(sim.pending_kickoff_side)
+				# If the clock already ran out while celebrating the goal,
+				# end the half/match instead of restarting for a kickoff.
+				if match_time >= settings.half_length:
+					_end_half()
+				else:
+					sim._reset_game(sim.pending_kickoff_side)
 		else:
 			input_reader.read(sim.inputs, sim.team_device, sim.kickoff_timer)
 			var scorer := sim.step(delta)
@@ -152,7 +157,7 @@ func _process(delta: float) -> void:
 	elif game_state == GameConfig.GameState.MATCH_SETUP:
 		setup.update(delta)
 	view._update_confetti(delta)
-	hud.update(sim.score_left, sim.score_right, game_state, sim.kickoff_timer, settings.half_length, match_time, current_half)
+	hud.update(sim.score_left, sim.score_right, game_state, sim.kickoff_timer, settings.half_length, match_time, current_half, delta)
 
 ## Restores normal speed once a special-shot slow-mo has run its (wall-clock) course.
 func _update_time_scale() -> void:
@@ -172,7 +177,7 @@ func _begin_goal_celebration(scorer: int) -> void:
 	Engine.time_scale = 1.0
 	slowmo_until_ms = 0
 	goal_freeze = GOAL_FREEZE_TIME
-	var col := Color(0.88, 0.20, 0.16) if scorer < 0 else Color(0.22, 0.38, 0.96)
+	var col: Color = sim.team_kit[0].shirt if scorer < 0 else sim.team_kit[1].shirt
 	hud.show_banner("GOAL!", col, GOAL_FREEZE_TIME)
 	audio._play_crowd_roar()
 
@@ -186,10 +191,10 @@ func _input(event: InputEvent) -> void:
 			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
 				_set_game_state(prev_menu_state)
 			GameConfig.GameState.MATCH_SETUP:
-				# Only the keyboard Esc backs out here; the pad's Start/A are
-				# MatchSetup's "begin match" confirm, so don't let Start (also bound
-				# to ui_cancel) double as a cancel and bounce us back to the menu.
-				if event is InputEventKey:
+				# Keyboard Esc steps back: kit page -> Choose Sides, Choose Sides -> menu.
+				# The pad's Start/A are MatchSetup's confirm, so (also bound to ui_cancel)
+				# they must not double as a cancel here.
+				if event is InputEventKey and not setup.back():
 					_set_game_state(GameConfig.GameState.MENU)
 		get_viewport().set_input_as_handled()
 
@@ -218,6 +223,10 @@ func _start_match() -> void:
 	goal_freeze = 0.0
 	Engine.time_scale = 1.0
 	slowmo_until_ms = 0
+	view._clear_confetti()
+	# Rebuild both teams from the formation/kit picked on the Choose Sides screen.
+	sim._create_teams()
+	hud.set_team_colors(sim.team_kit[0].shirt, sim.team_kit[1].shirt)
 	sim._set_default_ends()
 	sim._reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
@@ -226,24 +235,28 @@ func _start_match() -> void:
 func _update_match_clock(delta: float) -> void:
 	match_time += delta
 	if match_time >= settings.half_length:
-		if current_half == 1:
-			current_half = 2
-			match_time = 0.0
-			halftime_pause = 2.0
-			sim._switch_ends()
-			sim._reset_game(1)
-			audio._play_whistle()
-			hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
-		else:
-			_end_match()
+		_end_half()
+
+## Advances out of the current half: half time after the first, full time after the second.
+func _end_half() -> void:
+	if current_half == 1:
+		current_half = 2
+		match_time = 0.0
+		halftime_pause = 2.0
+		sim._switch_ends()
+		sim._reset_game(1)
+		audio._play_whistle()
+		hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
+	else:
+		_end_match()
 
 func _end_match() -> void:
 	audio._play_whistle()
 	var result := "DRAW"
 	if sim.score_left > sim.score_right:
-		result = "RED WINS"
+		result = "TIME A WINS"
 	elif sim.score_right > sim.score_left:
-		result = "BLUE WINS"
+		result = "TIME B WINS"
 	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [sim.score_left, sim.score_right, result])
 	_set_game_state(GameConfig.GameState.FULLTIME)
 

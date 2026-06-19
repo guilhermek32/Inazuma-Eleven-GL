@@ -10,6 +10,8 @@ var panel: PanelContainer
 var score_label: Label
 var timer_label: Label
 var banner: Label
+var chip_a: Label
+var chip_b: Label
 var _last_score := Vector2i(-1, -1)
 var _flash := 0.0
 var _banner_timer := 0.0
@@ -46,7 +48,8 @@ func _build_ui() -> void:
 	row.add_theme_constant_override("separation", 16)
 	col.add_child(row)
 
-	row.add_child(_team_chip("RED", Color(0.72, 0.12, 0.10)))
+	chip_a = _team_chip("TIME A", Color(0.72, 0.12, 0.10))
+	row.add_child(chip_a)
 
 	score_label = Label.new()
 	score_label.name = "ScoreLabel"
@@ -58,7 +61,8 @@ func _build_ui() -> void:
 	score_label.add_theme_constant_override("outline_size", 6)
 	row.add_child(score_label)
 
-	row.add_child(_team_chip("BLUE", Color(0.12, 0.20, 0.70)))
+	chip_b = _team_chip("TIME B", Color(0.12, 0.20, 0.70))
+	row.add_child(chip_b)
 
 	timer_label = Label.new()
 	timer_label.name = "TimerLabel"
@@ -106,10 +110,10 @@ func show_banner(text: String, color: Color, duration: float, big := true) -> vo
 	_banner_timer = _banner_dur
 	banner.visible = true
 
-func _tick_banner() -> void:
+func _tick_banner(delta: float) -> void:
 	if banner == null or _banner_timer <= 0.0:
 		return
-	_banner_timer = maxf(0.0, _banner_timer - get_process_delta_time())
+	_banner_timer = maxf(0.0, _banner_timer - delta)
 	if _banner_timer <= 0.0:
 		banner.visible = false
 		return
@@ -147,10 +151,21 @@ func _team_chip(text: String, color: Color) -> Label:
 	chip.add_theme_stylebox_override("normal", box)
 	return chip
 
-func update(score_left: int, score_right: int, game_state: int, kickoff_timer: float, half_length: float, match_time: float, current_half: int) -> void:
+## Recolours the scoreboard chips to the chosen team shirt colours.
+func set_team_colors(col_a: Color, col_b: Color) -> void:
+	if chip_a != null:
+		var sa := chip_a.get_theme_stylebox("normal") as StyleBoxFlat
+		if sa != null:
+			sa.bg_color = col_a
+	if chip_b != null:
+		var sb := chip_b.get_theme_stylebox("normal") as StyleBoxFlat
+		if sb != null:
+			sb.bg_color = col_b
+
+func update(score_left: int, score_right: int, game_state: int, kickoff_timer: float, half_length: float, match_time: float, current_half: int, delta: float) -> void:
 	if panel == null:
 		return
-	_tick_banner()
+	_tick_banner(delta)
 	panel.visible = game_state == GameConfig.GameState.PLAYING or game_state == GameConfig.GameState.PAUSED
 	if not panel.visible:
 		return
@@ -162,7 +177,7 @@ func update(score_left: int, score_right: int, game_state: int, kickoff_timer: f
 		_flash = 0.6
 	_last_score = score
 	if _flash > 0.0:
-		_flash = maxf(0.0, _flash - get_process_delta_time())
+		_flash = maxf(0.0, _flash - delta)
 		score_label.add_theme_color_override("font_color", Color.WHITE.lerp(Color(1.0, 0.92, 0.25), _flash / 0.6))
 		score_label.pivot_offset = score_label.size * 0.5
 		score_label.scale = Vector2.ONE * (1.0 + 0.18 * (_flash / 0.6))

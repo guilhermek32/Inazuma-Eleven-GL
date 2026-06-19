@@ -41,6 +41,13 @@ func reset_trail() -> void:
 	# existing grass marks keep fading naturally.
 	last_mark_pos = Vector2(1.0e9, 1.0e9)
 
+## Immediately removes any live confetti particles (called on match start so
+## leftover pieces from the previous match don't bleed into the new one).
+func _clear_confetti() -> void:
+	for p in confetti:
+		p.node.queue_free()
+	confetti.clear()
+
 func _create_ball() -> void:
 	var root := Node3D.new()
 	root.name = "Ball3D"
@@ -122,19 +129,19 @@ func _create_grass_marks() -> void:
 
 func _update_visuals(delta: float) -> void:
 	for i in sim.team_red.size():
-		_update_player_visual(sim.team_red[i], sim.ball.owner_team == 0 and sim.ball.owner_index == i, delta)
+		_update_player_visual(sim.team_red[i], i, sim.ball.owner_team == 0 and sim.ball.owner_index == i, delta)
 	for i in sim.team_blue.size():
-		_update_player_visual(sim.team_blue[i], sim.ball.owner_team == 1 and sim.ball.owner_index == i, delta)
+		_update_player_visual(sim.team_blue[i], i, sim.ball.owner_team == 1 and sim.ball.owner_index == i, delta)
 	_update_ball_visual(delta)
 	_update_camera(delta)
 	if celebration_timer > 0.0:
 		celebration_timer = maxf(0.0, celebration_timer - delta)
 
-func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+func _update_player_visual(p: PlayerState, player_index: int, owns_ball: bool, delta: float) -> void:
 	if p.node == null:
 		return
 	if p.uses_glb:
-		_update_glb_player_visual(p, owns_ball, delta)
+		_update_glb_player_visual(p, player_index, owns_ball, delta)
 		return
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := _facing_vector(p)
@@ -145,7 +152,6 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	(p.node.get_node("ArmR") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
-	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
 	var t := p.team_index
 	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
 	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
@@ -159,7 +165,7 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	else:
 		p.node.position.y = 0.0
 
-func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+func _update_glb_player_visual(p: PlayerState, player_index: int, owns_ball: bool, delta: float) -> void:
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := _facing_vector(p)
 	if face.length() > 0.001:
@@ -173,7 +179,6 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 			p.set_visual_state("run" if p.is_moving else "idle")
 	p.prev_x = p.x
 	p.prev_y = p.y
-	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
 	var t := p.team_index
 	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
 	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
@@ -296,7 +301,17 @@ func _update_camera(delta: float) -> void:
 	if camera_rig == null or camera_3d == null:
 		return
 	var _fs := GameConfig.FIELD_SCALE
-	var target_pos := Vector3(clampf(sim.ball.x * _fs * 0.25, -_fs * (5.0 / 18.0), _fs * (5.0 / 18.0)), _fs, _fs * (4.0 / 3.0) + clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0)))
+	# Height and base distance are scaled by the player's chosen camera-angle preset.
+	var zoom := sim.settings.cam_zoom_mult
+	var cam_h := _fs * sim.settings.cam_height_mult * zoom
+	var cam_z := _fs * (4.0 / 3.0) * sim.settings.cam_dist_mult * zoom
+	var follow_z := clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0))
+	# Keep the camera behind the ball along +z so it never crosses to the far side of it.
+	# If it did, look_at would swing ~180 deg and mirror the on-screen directions (mouse
+	# aim + movement) -- exactly what the short-distance Top-down preset was hitting.
+	var ball_z := -sim.ball.y * _fs
+	var target_z := maxf(cam_z + follow_z, ball_z + _fs * 0.27)
+	var target_pos := Vector3(clampf(sim.ball.x * _fs * 0.25, -_fs * (5.0 / 18.0), _fs * (5.0 / 18.0)), cam_h, target_z)
 	camera_rig.position = camera_rig.position.lerp(target_pos, 1.0 - exp(-1.8 * delta))
 	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)
