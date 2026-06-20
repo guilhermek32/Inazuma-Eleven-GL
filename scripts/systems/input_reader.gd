@@ -6,6 +6,9 @@ extends RefCounted
 ## the broadcast camera.
 
 var camera_3d: Camera3D
+# Cached world position of the last successful mouse ray-cast; returned on miss
+# so the aim vector never snaps to the origin mid-game.
+var _last_valid_aim := Vector2.ZERO
 
 func read(inputs: Array, team_device: Array, kickoff_timer: float) -> void:
 	var allow := kickoff_timer <= 0.0
@@ -51,11 +54,14 @@ func _read_gamepad_input(snap: InputSnapshot, device: int, allow: bool) -> void:
 
 func _mouse_aim_world() -> Vector2:
 	if camera_3d == null:
-		return Vector2.ZERO
+		return _last_valid_aim
 	var mouse := camera_3d.get_viewport().get_mouse_position()
 	var origin := camera_3d.project_ray_origin(mouse)
 	var dir := camera_3d.project_ray_normal(mouse)
 	var hit = Plane(Vector3.UP, 0.0).intersects_ray(origin, dir)
 	if hit == null:
-		return Vector2.ZERO
-	return Vector2(hit.x / GameConfig.FIELD_SCALE, -hit.z / GameConfig.FIELD_SCALE)
+		# Ray is nearly parallel to the ground (extreme camera angle); keep the
+		# last known aim so the shot direction doesn't snap to the origin.
+		return _last_valid_aim
+	_last_valid_aim = Vector2(hit.x / GameConfig.FIELD_SCALE, -hit.z / GameConfig.FIELD_SCALE)
+	return _last_valid_aim

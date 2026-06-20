@@ -189,7 +189,7 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	spot.light_color = Color(0.85, 0.92, 1.0)
 	spot.light_energy = 30.0
 	spot.light_specular = 1.0
-	spot.spot_range = 90.0
+	spot.spot_range = 110.0
 	spot.spot_angle = 50.0
 	spot.spot_attenuation = 1.4
 	spot.light_size = 0.9        # tighter source → crisper, readable shadow edges

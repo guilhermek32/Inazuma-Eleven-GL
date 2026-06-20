@@ -85,7 +85,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "CHOOSE SIDES (Play Now)\nEach device moves its own chip: pad left stick / D-pad, keyboard A / D.\nLeft = RED, right = BLUE. One device per side; an empty side is the AI.\nPress START / Space to begin once a side is filled.\n\nKEYBOARD + MOUSE\nMove: W A S D    Aim: Mouse\nShoot: hold SPACE to charge, release to kick    Pass: E    Switch: Q\n\nCONTROLLER\nMove: Left stick    Aim: Right stick\nShoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
+	text.text = "CHOOSE SIDES (Play Now)\nEach device moves its own chip: pad left stick / D-pad, keyboard A / D.\nLeft = TIME A, right = TIME B. One device per side; an empty side is the AI.\nPick each team's formation and kit colours (shirt / shorts / boots) here too.\nPress START / Space to begin once a side is filled.\n\nKEYBOARD + MOUSE\nMove: W A S D    Aim: Mouse\nShoot: hold SPACE to charge, release to kick    Pass: E    Switch: Q\n\nCONTROLLER\nMove: Left stick    Aim: Right stick\nShoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: controller._set_game_state(controller.prev_menu_state))
 
@@ -125,6 +125,24 @@ func _build_settings_panel() -> void:
 	length_opt.selected = GameConfig.MATCH_LENGTHS.find(settings.half_length) if GameConfig.MATCH_LENGTHS.has(settings.half_length) else 0
 	length_opt.item_selected.connect(func(i: int) -> void: settings.half_length = GameConfig.MATCH_LENGTHS[i]; settings.save())
 	_settings_row(vb, "Match Length", length_opt)
+
+	var camera_opt := OptionButton.new()
+	camera_opt.add_item("Low")
+	camera_opt.add_item("Broadcast")
+	camera_opt.add_item("High")
+	camera_opt.add_item("Top-down")
+	camera_opt.selected = settings.camera_angle
+	camera_opt.item_selected.connect(func(i: int) -> void: settings.camera_angle = i; settings.apply(); settings.save())
+	_settings_row(vb, "Camera Angle", camera_opt)
+
+	var camdist_opt := OptionButton.new()
+	camdist_opt.add_item("Close")
+	camdist_opt.add_item("Normal")
+	camdist_opt.add_item("Far")
+	camdist_opt.add_item("Very Far")
+	camdist_opt.selected = settings.camera_distance
+	camdist_opt.item_selected.connect(func(i: int) -> void: settings.camera_distance = i; settings.apply(); settings.save())
+	_settings_row(vb, "Camera Distance", camdist_opt)
 
 	var fs_check := CheckButton.new()
 	fs_check.button_pressed = settings.fullscreen

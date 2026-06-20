@@ -10,16 +10,21 @@ var glb_scene_cache := {}
 var player_anim_library: AnimationLibrary
 var player_anim_ready := false
 
-func _create_player_visual(state: PlayerState) -> Node3D:
-	var glb_visual = _create_glb_player_visual(state)
+func _create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
+	var glb_visual = _create_glb_player_visual(state, kit)
 	if glb_visual != null:
 		return glb_visual
+	var shirt_mat := _kit_mat(kit.shirt)
+	var shorts_mat := _kit_mat(kit.shorts)
+	var boots_mat := _kit_mat(kit.boots)
 	var root := Node3D.new()
-	root.name = "RedPlayer" if state.side == -1 else "BluePlayer"
-	var uniform: Material = mf.materials.goalkeeper if state.role == GameConfig.PlayerRole.GOALKEEPER else (mf.materials.player_red if state.side == -1 else mf.materials.player_blue)
-	var body := mf._mesh("Body", BoxMesh.new(), uniform, Vector3(0.0, 0.78, 0.0))
+	root.name = "PlayerA" if state.side == -1 else "PlayerB"
+	var body := mf._mesh("Body", BoxMesh.new(), shirt_mat, Vector3(0.0, 0.78, 0.0))
 	body.mesh.size = Vector3(0.42, 0.82, 0.26)
 	root.add_child(body)
+	var shorts := mf._mesh("Shorts", BoxMesh.new(), shorts_mat, Vector3(0.0, 0.42, 0.0))
+	shorts.mesh.size = Vector3(0.40, 0.26, 0.24)
+	root.add_child(shorts)
 	var head := mf._mesh("Head", SphereMesh.new(), mf.materials.skin, Vector3(0.0, 1.34, 0.0))
 	head.mesh.radius = 0.22
 	head.mesh.height = 0.42
@@ -29,7 +34,7 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	hair.mesh.height = 0.18
 	root.add_child(hair)
 	for limb_name in ["ArmL", "ArmR", "LegL", "LegR"]:
-		var limb_mat: Material = uniform if limb_name.begins_with("Arm") else mf.materials.boots
+		var limb_mat: Material = shirt_mat if limb_name.begins_with("Arm") else boots_mat
 		var limb := mf._mesh(limb_name, BoxMesh.new(), limb_mat, Vector3.ZERO)
 		limb.mesh.size = Vector3(0.13, 0.62, 0.13)
 		root.add_child(limb)
@@ -58,9 +63,9 @@ func _create_player_visual(state: PlayerState) -> Node3D:
 	root.add_child(_jersey_label(1.85))
 	return root
 
-func _create_glb_player_visual(state: PlayerState):
+func _create_glb_player_visual(state: PlayerState, kit: Dictionary):
 	var root := Node3D.new()
-	root.name = "RedGLBPlayer" if state.team_index == 0 else "BlueGLBPlayer"
+	root.name = "PlayerAGLB" if state.team_index == 0 else "PlayerBGLB"
 	state.uses_glb = true
 	state.node = root
 	var marker := mf._mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
@@ -89,7 +94,7 @@ func _create_glb_player_visual(state: PlayerState):
 		root.free()
 		return null
 	_place_glb_model(model)
-	_apply_team_tint(model, state.team_index)
+	_apply_team_kit(model, kit)
 	model.name = "Model"
 	model.rotation_degrees = Vector3(0.0, GameConfig.PLAYER_GLB_YAW_OFFSET, 0.0)
 	root.add_child(model)
@@ -201,30 +206,49 @@ func _place_glb_model(model: Node3D) -> void:
 	model.scale = Vector3.ONE * scale
 	model.position = Vector3(-center.x * scale, GameConfig.PLAYER_GLB_Y_OFFSET - bounds.position.y * scale, -center.z * scale)
 
-func _apply_team_tint(model: Node3D, team_index: int) -> void:
-	var tint := Color(0.95, 0.10, 0.08) if team_index == 0 else Color(0.08, 0.36, 1.0)
-	_apply_team_tint_recursive(model, tint)
+func _apply_team_kit(model: Node3D, kit: Dictionary) -> void:
+	_apply_team_kit_recursive(model, kit)
 
-func _apply_team_tint_recursive(node: Node, tint: Color) -> void:
-	if node is MeshInstance3D and _is_uniform_mesh(node.name):
-		var mesh_instance := node as MeshInstance3D
-		var mesh := mesh_instance.mesh
-		if mesh != null:
-			for surface_idx in mesh.get_surface_count():
-				var base_mat := mesh_instance.get_surface_override_material(surface_idx)
-				if base_mat == null:
-					base_mat = mesh.surface_get_material(surface_idx)
-				var mat: Material = base_mat.duplicate() if base_mat != null else StandardMaterial3D.new()
-				if mat is BaseMaterial3D:
-					var base := mat as BaseMaterial3D
-					base.albedo_color = base.albedo_color.lerp(tint, 0.62)
-				mesh_instance.set_surface_override_material(surface_idx, mat)
+func _apply_team_kit_recursive(node: Node, kit: Dictionary) -> void:
+	if node is MeshInstance3D:
+		var part := _kit_part(node.name)
+		if part != "":
+			var tint: Color = kit[part]
+			var mesh_instance := node as MeshInstance3D
+			var mesh := mesh_instance.mesh
+			if mesh != null:
+				for surface_idx in mesh.get_surface_count():
+					var base_mat := mesh_instance.get_surface_override_material(surface_idx)
+					if base_mat == null:
+						base_mat = mesh.surface_get_material(surface_idx)
+					var mat: Material = base_mat.duplicate() if base_mat != null else StandardMaterial3D.new()
+					if mat is BaseMaterial3D:
+						var base := mat as BaseMaterial3D
+						base.albedo_color = base.albedo_color.lerp(tint, 0.85)
+					mesh_instance.set_surface_override_material(surface_idx, mat)
 	for child: Node in node.get_children():
-		_apply_team_tint_recursive(child, tint)
+		_apply_team_kit_recursive(child, kit)
 
-func _is_uniform_mesh(node_name: StringName) -> bool:
+# Maps a GLB mesh name to a kit piece (shirt/shorts/boots), or "" to leave it as-is.
+func _kit_part(node_name: StringName) -> String:
 	var n := String(node_name).to_lower()
-	return n.contains("shirt") or n.contains("short") or n.contains("sock")
+	if n.contains("shirt") or n.contains("jersey"):
+		return "shirt"
+	if n.contains("short") or n.contains("trouser") or n.contains("pant"):
+		return "shorts"
+	if n.contains("sock") or n.contains("shoe") or n.contains("boot"):
+		return "boots"
+	return ""
+
+# A team-kit material built from a chosen colour (used by the box-figure fallback).
+func _kit_mat(color: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.roughness = 0.58
+	m.rim_enabled = true
+	m.rim = 0.35
+	m.rim_tint = 0.4
+	return m
 
 func _jersey_label(height: float) -> Label3D:
 	var label := Label3D.new()
