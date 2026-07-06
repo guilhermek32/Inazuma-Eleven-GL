@@ -405,11 +405,11 @@ func _refresh_hint() -> void:
 func _launch() -> void:
 	var a: Variant = _chip_on_column(COL_RED)
 	var b: Variant = _chip_on_column(COL_BLUE)
-	sim.team_device[0] = a.device if a != null else GameConfig.DEVICE_AI
-	sim.team_device[1] = b.device if b != null else GameConfig.DEVICE_AI
+	sim.teams[0].device = a.device if a != null else GameConfig.DEVICE_AI
+	sim.teams[1].device = b.device if b != null else GameConfig.DEVICE_AI
 	for t in 2:
-		sim.team_formation[t] = cfg_form[t].selected
-		sim.team_kit[t] = {
+		sim.teams[t].formation = cfg_form[t].selected
+		sim.teams[t].kit = {
 			"shirt": GameConfig.KIT_PALETTE[cfg_shirt[t].selected].color,
 			"shorts": GameConfig.KIT_PALETTE[cfg_shorts[t].selected].color,
 			"boots": GameConfig.KIT_PALETTE[cfg_boots[t].selected].color,

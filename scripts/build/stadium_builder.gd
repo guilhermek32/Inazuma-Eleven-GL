@@ -4,12 +4,12 @@ extends RefCounted
 ## Builds the night environment, broadcast camera, floodlights and the stadium
 ## shell (stands, walls, hoardings, crowd). `host` receives the top-level nodes
 ## (environment/camera/lights); `stadium_root` the structure.
-## After `_build_camera()`, read back `camera_rig`/`camera_3d`.
+## After `build_camera()`, read back `camera_rig`/`camera_3d`.
 
 # Stand placement, as fractions of FIELD_SCALE. The /18.0 denominators are legacy
 # proportions from when the pitch spanned 18 world units; kept so the stadium keeps
 # its tuned look at the current FIELD_SCALE. Shared so the stand shells
-# (_build_stadium) and the crowd banks (_add_crowd) stay aligned.
+# (build_stadium) and the crowd banks (_add_crowd) stay aligned.
 const STAND_GAP_Z := 5.0 / 18.0    # north/south stands: gap from pitch edge
 const STAND_GAP_X := 5.5 / 18.0    # east/west stands: gap from pitch edge
 
@@ -20,7 +20,7 @@ var camera_rig: Node3D
 var camera_3d: Camera3D
 var voxel_gi: VoxelGI
 
-func _build_environment() -> void:
+func build_environment() -> void:
 	var world := WorldEnvironment.new()
 	world.name = "WorldEnvironment"
 	var env := Environment.new()
@@ -76,7 +76,7 @@ func _build_environment() -> void:
 	world.environment = env
 	host.add_child(world)
 
-func _build_camera() -> void:
+func build_camera() -> void:
 	camera_rig = Node3D.new()
 	camera_rig.name = "CameraRig"
 	var s := GameConfig.FIELD_SCALE
@@ -89,7 +89,7 @@ func _build_camera() -> void:
 	camera_rig.add_child(camera_3d)
 	camera_3d.look_at(Vector3.ZERO, Vector3.UP)
 
-func _build_lighting() -> void:
+func build_lighting() -> void:
 	# Bigger positional shadow atlas so each of the four far floodlights gets enough
 	# texels to resolve a crisp player shadow (default 2048 split four ways is too
 	# coarse for cones firing across the whole pitch from the corners).
@@ -131,7 +131,7 @@ func _build_lighting() -> void:
 # goals, emissive hoardings) is built; bake() is triggered separately by
 # the controller, deferred one frame and before the dynamic players exist, so the
 # probe captures only static surfaces and the coloured neon spill bounces onto turf.
-func _build_gi() -> void:
+func build_gi() -> void:
 	var s := GameConfig.FIELD_SCALE
 	voxel_gi = VoxelGI.new()
 	voxel_gi.name = "VoxelGI"
@@ -141,7 +141,7 @@ func _build_gi() -> void:
 	voxel_gi.position = Vector3(0.0, 5.0, 0.0)
 	host.add_child(voxel_gi)
 
-func _bake_gi() -> void:
+func bake_gi() -> void:
 	if voxel_gi != null:
 		voxel_gi.bake()
 
@@ -152,14 +152,14 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	parent.add_child(tower)
 	# Thick tapered steel mast rising from the ground to the head (lit metal so the
 	# pole itself reads clearly as a structure, not a hairline).
-	var pole := mf._mesh("Pole", CylinderMesh.new(), mf.materials.metal_mast, Vector3.ZERO)
+	var pole := mf.make_mesh("Pole", CylinderMesh.new(), mf.materials.metal_mast, Vector3.ZERO)
 	pole.mesh.height = pos.y
 	pole.mesh.top_radius = 0.45
 	pole.mesh.bottom_radius = 0.70
 	pole.position.y = -pos.y * 0.5
 	tower.add_child(pole)
 	# Base plinth so the pole reads as planted in the ground.
-	var base := mf._mesh("MastBase", CylinderMesh.new(), mf.materials.metal_dark, Vector3(0.0, -pos.y + 0.4, 0.0))
+	var base := mf.make_mesh("MastBase", CylinderMesh.new(), mf.materials.metal_dark, Vector3(0.0, -pos.y + 0.4, 0.0))
 	base.mesh.height = 0.8
 	base.mesh.top_radius = 0.9
 	base.mesh.bottom_radius = 1.1
@@ -205,12 +205,12 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 func _build_lamp_bank(head: Node3D) -> void:
 	# Short bracket arm tying the housing to the mast top. The fixture geometry never
 	# casts shadows — otherwise it would occlude its own (and neighbouring) floodlights.
-	var arm := mf._mesh("LampArm", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, 0.4))
+	var arm := mf.make_mesh("LampArm", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, 0.4))
 	arm.mesh.size = Vector3(0.35, 0.35, 1.0)
 	arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	head.add_child(arm)
 	# Deep housing box: width × height × depth, so it has real volume from any angle.
-	var housing := mf._mesh("LampHousing", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, -0.7))
+	var housing := mf.make_mesh("LampHousing", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, -0.7))
 	housing.mesh.size = Vector3(4.4, 2.6, 1.2)
 	housing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	head.add_child(housing)
@@ -220,12 +220,12 @@ func _build_lamp_bank(head: Node3D) -> void:
 		for c in cols:
 			var cx := (float(c) - float(cols - 1) * 0.5) * 1.0
 			var cy := (float(r) - float(rows - 1) * 0.5) * 0.78
-			var cell := mf._mesh("LampCell%d_%d" % [r, c], BoxMesh.new(), mf.materials.floodlamp, Vector3(cx, cy, -1.35))
+			var cell := mf.make_mesh("LampCell%d_%d" % [r, c], BoxMesh.new(), mf.materials.floodlamp, Vector3(cx, cy, -1.35))
 			cell.mesh.size = Vector3(0.82, 0.62, 0.22)
 			cell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			head.add_child(cell)
 
-func _build_stadium() -> void:
+func build_stadium() -> void:
 	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
 	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
 	var s := GameConfig.FIELD_SCALE
@@ -241,7 +241,7 @@ func _build_stadium() -> void:
 	_add_hoardings()
 
 func _add_ground_apron() -> void:
-	var apron := mf._mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
+	var apron := mf.make_mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
 	var s := GameConfig.FIELD_SCALE
 	apron.mesh.size = Vector3(s * (72.0 / 18.0), 0.08, s * (68.0 / 18.0))
 	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -256,10 +256,10 @@ func _add_perimeter_walls() -> void:
 		["EastWall", Vector3(s * (35.7 / 18.0), 4.0, 0.0), Vector3(0.6, 8.0, s * (68.0 / 18.0))],
 	]
 	for w in walls:
-		var wall := mf._mesh(w[0], BoxMesh.new(), mf.materials.wall, w[1])
+		var wall := mf.make_mesh(w[0], BoxMesh.new(), mf.materials.wall, w[1])
 		wall.mesh.size = w[2]
 		stadium_root.add_child(wall)
-		var band := mf._mesh("%sBand" % w[0], BoxMesh.new(), mf.materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
+		var band := mf.make_mesh("%sBand" % w[0], BoxMesh.new(), mf.materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
 		band.mesh.size = Vector3(maxf(w[2].x, 0.8), 0.7, maxf(w[2].z, 0.8))
 		stadium_root.add_child(band)
 	var sign := Label3D.new()
@@ -302,11 +302,11 @@ func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
 	board.position = pos
 	board.rotation = Vector3(-0.12, yaw, 0.0)
 	stadium_root.add_child(board)
-	var frame := mf._mesh("Frame", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.46, -0.04))
+	var frame := mf.make_mesh("Frame", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.46, -0.04))
 	frame.mesh.size = Vector3(3.7, 0.92, 0.08)
 	board.add_child(frame)
 	var scheme: int = idx % mf.materials.ad_panels.size()
-	var panel := mf._mesh("Panel", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
+	var panel := mf.make_mesh("Panel", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
 	panel.mesh.size = Vector3(3.55, 0.78, 0.05)
 	board.add_child(panel)
 	var label := Label3D.new()
@@ -323,11 +323,11 @@ func _add_stand(stand_name: String, pos: Vector3, size: Vector3, mat: StandardMa
 	stand.position = pos
 	stadium_root.add_child(stand)
 	for tier in 4:
-		var tier_mesh := mf._mesh("Tier%d" % tier, BoxMesh.new(), mat, Vector3(0.0, float(tier) * 0.55, 0.0))
+		var tier_mesh := mf.make_mesh("Tier%d" % tier, BoxMesh.new(), mat, Vector3(0.0, float(tier) * 0.55, 0.0))
 		tier_mesh.mesh.size = Vector3(size.x - float(tier) * 0.55, 0.42, size.z - float(tier) * 0.35)
 		stand.add_child(tier_mesh)
 		var seat_mat: Material = mf.materials.seat_red if tier % 2 == 0 else mf.materials.seat_blue
-		var seat := mf._mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
+		var seat := mf.make_mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
 		seat.mesh.size = Vector3(tier_mesh.mesh.size.x * 0.94, 0.08, tier_mesh.mesh.size.z * 0.72)
 		stand.add_child(seat)
 

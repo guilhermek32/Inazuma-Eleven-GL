@@ -48,7 +48,7 @@ func _apply_settings() -> void:
 	DisplayServer.window_set_mode(mode)
 	apply_volumes()
 
-func _load_settings() -> void:
+func load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(GameConfig.SETTINGS_PATH) == OK:
 		difficulty = cfg.get_value("game", "difficulty", difficulty)
@@ -73,7 +73,7 @@ func _save_settings() -> void:
 	cfg.set_value("audio", "sfx", vol_sfx)
 	cfg.save(GameConfig.SETTINGS_PATH)
 
-func _setup_input_actions() -> void:
+func setup_input_actions() -> void:
 	_add_key_action("move_up", KEY_W)
 	_add_key_action("move_down", KEY_S)
 	_add_key_action("move_left", KEY_A)
@@ -81,6 +81,9 @@ func _setup_input_actions() -> void:
 	_add_key_action("shoot", KEY_SPACE)
 	_add_key_action("pass", KEY_E)
 	_add_key_action("switch_player", KEY_Q)
+	_add_key_action("tackle", KEY_CTRL)
+	_add_mouse_button_action("tackle", MOUSE_BUTTON_RIGHT)
+	_add_key_action("sprint", KEY_SHIFT)
 	_add_joy_button_action("pass", JOY_BUTTON_A)
 	_add_joy_button_action("switch_player", JOY_BUTTON_LEFT_SHOULDER)
 	_add_joy_button_action("ui_cancel", JOY_BUTTON_START)
@@ -98,6 +101,16 @@ func _add_key_action(action: StringName, keycode: Key) -> void:
 	event.physical_keycode = keycode
 	for existing in InputMap.action_get_events(action):
 		if existing is InputEventKey and existing.physical_keycode == keycode:
+			return
+	InputMap.action_add_event(action, event)
+
+func _add_mouse_button_action(action: StringName, button_index: MouseButton) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	var event := InputEventMouseButton.new()
+	event.button_index = button_index
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventMouseButton and existing.button_index == button_index:
 			return
 	InputMap.action_add_event(action, event)
 

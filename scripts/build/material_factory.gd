@@ -7,7 +7,7 @@ extends RefCounted
 
 var materials := {}
 
-func _build_materials() -> void:
+func build_materials() -> void:
 	# Pre-bake procedural normal maps: tangent-space RGB from height-field gradients.
 	var grass_nrm := _normal_texture(2.5, 0x6752)
 	var concrete_nrm := _normal_texture(3.0, 0xC0FF)
@@ -106,7 +106,7 @@ func _build_materials() -> void:
 	materials.special_aura.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	materials.special_aura.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-func _mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+func make_mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
 	node.name = node_name
 	node.mesh = mesh
@@ -249,7 +249,7 @@ func _net_texture(size := 64, step := 8) -> Texture2D:
 
 # Soft radial scuff for the ball's grass trail: a dark pressed-turf disc that fades
 # to fully transparent at the rim, with a little noise so repeated marks vary.
-func _decal_albedo_texture(size := 64) -> Texture2D:
+func decal_albedo_texture(size := 64) -> Texture2D:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xDEC0
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
@@ -271,7 +271,7 @@ func _decal_albedo_texture(size := 64) -> Texture2D:
 # Radial dimple normal map for the trail decal: the turf is pressed down where the
 # ball rolled, so surface normals tilt inward — this is what perturbs ("interferes
 # with") the grass normals under the decal so the floodlights catch the dent.
-func _decal_normal_texture(size := 64, strength := 4.0) -> Texture2D:
+func decal_normal_texture(size := 64, strength := 4.0) -> Texture2D:
 	var c := float(size - 1) * 0.5
 	var h := PackedFloat32Array()
 	h.resize(size * size)

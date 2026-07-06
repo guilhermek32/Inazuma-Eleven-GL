@@ -12,7 +12,7 @@ var sfx_whistle: AudioStreamPlayer
 var sfx_special: AudioStreamPlayer
 var sfx_roar: AudioStreamPlayer
 
-func _build_audio() -> void:
+func build_audio() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
 	bus_music = _add_audio_bus("Music")
@@ -50,19 +50,19 @@ func _make_stream_player(node_name: String, path: String, bus: String, loop: boo
 	add_child(player)
 	return player
 
-func _play_kick() -> void:
+func play_kick() -> void:
 	if sfx_kick != null:
 		sfx_kick.play()
 
-func _play_whistle() -> void:
+func play_whistle() -> void:
 	if sfx_whistle != null:
 		sfx_whistle.play()
 
-func _play_special() -> void:
+func play_special() -> void:
 	if sfx_special != null:
 		sfx_special.play()
 
-func _play_crowd_roar() -> void:
+func play_crowd_roar() -> void:
 	if sfx_roar != null:
 		sfx_roar.play()
 

@@ -12,12 +12,14 @@ var timer_label: Label
 var banner: Label
 var chip_a: Label
 var chip_b: Label
+# Thin sprint-stamina bars under the panel, one per team; hidden for AI teams.
+var stamina_bars: Array[ProgressBar] = []
 var _last_score := Vector2i(-1, -1)
 var _flash := 0.0
 var _banner_timer := 0.0
 var _banner_dur := 0.0
 
-func _build_ui() -> void:
+func build_ui() -> void:
 	ui_layer = CanvasLayer.new()
 	ui_layer.name = "ScoreboardUI"
 	add_child(ui_layer)
@@ -72,6 +74,31 @@ func _build_ui() -> void:
 	timer_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.85))
 	timer_label.add_theme_constant_override("outline_size", 5)
 	col.add_child(timer_label)
+
+	# Sprint stamina of each human team's selected player.
+	var bar_row := HBoxContainer.new()
+	bar_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	bar_row.add_theme_constant_override("separation", 24)
+	col.add_child(bar_row)
+	for t in 2:
+		var bar := ProgressBar.new()
+		bar.min_value = 0.0
+		bar.max_value = 1.0
+		bar.value = 1.0
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(90.0, 5.0)
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var bg := StyleBoxFlat.new()
+		bg.bg_color = Color(0.0, 0.0, 0.0, 0.55)
+		bg.set_corner_radius_all(2)
+		bar.add_theme_stylebox_override("background", bg)
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = Color(0.35, 0.95, 0.45)
+		fill.set_corner_radius_all(2)
+		bar.add_theme_stylebox_override("fill", fill)
+		bar.visible = false
+		bar_row.add_child(bar)
+		stamina_bars.append(bar)
 
 	# Transient on-screen banner, full screen width so the text always centres horizontally.
 	# Size and vertical position are set per message in show_banner().
@@ -162,7 +189,14 @@ func set_team_colors(col_a: Color, col_b: Color) -> void:
 		if sb != null:
 			sb.bg_color = col_b
 
-func update(score_left: int, score_right: int, game_state: int, kickoff_timer: float, half_length: float, match_time: float, current_half: int, delta: float) -> void:
+const RESTART_LABELS := {
+	MatchSimulation.Restart.KICKOFF: "Kickoff",
+	MatchSimulation.Restart.THROW_IN: "Throw-in",
+	MatchSimulation.Restart.CORNER: "Corner",
+	MatchSimulation.Restart.GOAL_KICK: "Goal kick",
+}
+
+func update(score_left: int, score_right: int, game_state: int, restart_timer: float, restart_type: int, half_length: float, match_time: float, current_half: int, delta: float) -> void:
 	if panel == null:
 		return
 	_tick_banner(delta)
@@ -187,8 +221,18 @@ func update(score_left: int, score_right: int, game_state: int, kickoff_timer: f
 
 	if game_state != GameConfig.GameState.PLAYING:
 		timer_label.text = ""
-	elif kickoff_timer > 0.0:
-		timer_label.text = "Kickoff %.1f" % kickoff_timer
+		for bar in stamina_bars:
+			bar.visible = false
+	elif restart_timer > 0.0:
+		timer_label.text = "%s %.1f" % [RESTART_LABELS.get(restart_type, "Kickoff"), restart_timer]
 	else:
 		var remaining := int(ceil(maxf(0.0, half_length - match_time)))
 		timer_label.text = "%d:%02d   %s  Half" % [remaining / 60, remaining % 60, "1st" if current_half == 1 else "2nd"]
+
+## Shows each human team's selected-player sprint stamina; pass -1 to hide a bar.
+func update_stamina(values: Array) -> void:
+	for t in mini(values.size(), stamina_bars.size()):
+		var v: float = values[t]
+		stamina_bars[t].visible = v >= 0.0
+		if v >= 0.0:
+			stamina_bars[t].value = v

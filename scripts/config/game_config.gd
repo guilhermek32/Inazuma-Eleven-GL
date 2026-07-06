@@ -57,6 +57,75 @@ const PLAYER_ANIM_FILES := {
 	"tackle": ["soccer tackle.glb", false],
 }
 
+# --- Gameplay tuning -----------------------------------------------------------
+# Every feel-critical number of the simulation and AI lives here so balancing is a
+# one-file job. Distances/speeds are in normalized field units (x in ±0.93).
+
+# Player movement (per-role speeds: attackers edge out defenders)
+const PLAYER_SPEED := 0.2            # fallback outfield speed
+const GK_SPEED := 0.32               # goalkeeper shuffle speed
+const ROLE_SPEED := {PlayerRole.GOALKEEPER: GK_SPEED, PlayerRole.DEFENDER: 0.19, PlayerRole.MIDFIELDER: 0.20, PlayerRole.ATTACKER: 0.215}
+const SPRINT_MULT := 1.4             # speed multiplier while sprinting
+const SPRINT_DRAIN := 0.35           # stamina drained per second sprinting
+const SPRINT_REGEN := 0.25           # stamina regained per second otherwise
+
+# Ball capture / tackling
+const CAPTURE_RADIUS := 0.045        # outfield players
+const GK_CAPTURE_RADIUS := 0.10      # keeper's normal reach
+const GK_CAPTURE_RADIUS_SUPER := 0.05  # keeper's reach against a super shot
+const TACKLE_STUN := 0.45            # stun on the player who loses a tackle
+const TACKLE_WINDOW := 0.25          # seconds a tackle press stays "live"
+const TACKLE_WHIFF_STUN := 0.5       # self-stun when a tackle wins nothing
+const AI_TACKLE_RATE := 3.0          # per-second chance the AI presser lunges
+const AI_TACKLE_RANGE := 0.09        # ...when this close to the carrier
+
+# Kicking
+const KICK_BASE_POWER := 0.55        # ball speed = base + charge * scale
+const KICK_POWER_SCALE := 1.2
+const CHARGE_RATE := 2.0             # charge fraction gained per second holding shoot
+const PASS_POWER := 0.35             # fixed charge fraction used for passes
+const KICK_SELF_STUN_HARD := 0.25    # post-kick stun (stops instant re-capture)
+const KICK_SELF_STUN_SOFT := 0.1
+
+# AI decision-making (rates are per-second probabilities, scaled by delta)
+const AI_PRESSURE_DIST := 0.15       # opponent this close = carrier under pressure
+const AI_PRESSURE_PASS_RATE := 4.0
+const AI_SHOOT_RATE := 3.0
+const AI_PASS_RATE := 1.8
+const AI_SHOOT_RANGE_FACING := 0.50  # shooting range when facing the goal
+const AI_SHOOT_RANGE := 0.30         # shooting range otherwise
+const PASS_OPENNESS_RADIUS := 0.18   # receiver counts as marked inside this radius
+const PASS_LANE_RADIUS := 0.05       # opponent this close to the passing lane blocks it
+const PASS_BACKWARD_PENALTY := 2.5   # score malus for passing away from goal
+# Keeper reaction delay (s) to an inbound shot, by difficulty (Easy/Normal/Hard).
+const GK_REACTION := [0.28, 0.20, 0.12]
+const GK_SHOT_SPEED := 0.5           # ball speed toward goal that reads as a shot
+
+# Off-ball movement
+const ROLE_ADVANCE := {PlayerRole.DEFENDER: 0.25, PlayerRole.MIDFIELDER: 0.50, PlayerRole.ATTACKER: 0.78}
+const SPACING_DIST := 0.20           # teammates closer than this push apart
+const SPACING_PUSH := 0.14
+
+# Ball flight. Heights and vertical speeds are in WORLD units (the pitch is ~56
+# world units long, the crossbar sits at GOAL_HEIGHT); the 2D plane stays normalized.
+const GOAL_HEIGHT := 1.8             # crossbar height, shared with PitchBuilder
+const BALL_GRAVITY := 16.0           # world units/s^2 (arcade-snappy, not 9.8)
+const BALL_BOUNCE := 0.45            # vertical restitution on landing
+const BALL_BOUNCE_MIN := 0.9         # kill bounces below this upward speed
+const AIR_FRICTION := 0.995          # per-frame-at-60fps drag while airborne
+const SHOT_LOFT := 2.4               # shot vh = charge * SHOT_LOFT
+const CLEARANCE_LOFT := 4.2          # keeper clearances / corner kicks arc
+const CAPTURE_MAX_HEIGHT := 1.1      # outfielders can't control a ball above this
+const GK_REACH_HEIGHT := 1.8         # the keeper can reach up to the bar
+const HARD_SHOT_CURVE := 0.3         # max random Magnus curve (rad/s) on ordinary hard shots
+
+# Restart play (throw-ins / corners / goal kicks)
+const RESTART_FREEZE := 1.2          # seconds play holds while the taker sets up
+const CORNER_SPOT_X := 0.90          # normalized corner-arc restart spot
+const CORNER_SPOT_Y := 0.70
+const GOAL_KICK_X := 0.84            # normalized |x| where the keeper places a goal kick
+const THROW_IN_MAX_X := 0.88         # throw-in spots clamp inside the corners
+
 const MATCH_LENGTHS := [120.0, 300.0, 600.0]
 const SETTINGS_PATH := "user://settings.cfg"
 const BALL_FRICTION := 0.98   # velocity multiplier applied per-second (frame-rate independent via pow)
@@ -65,13 +134,14 @@ const BALL_FRICTION := 0.98   # velocity multiplier applied per-second (frame-ra
 # occasional powerful AI shot) "evolves" into one of these: the ball gains an elemental
 # aura/light in this colour, a brief slow-mo plays and the name flashes on the HUD.
 const SPECIAL_SHOT_CHARGE := 0.85   # charge fraction a user shot needs to evolve
+# `curve` is the signed Magnus curl (rad/s) so each special has its own flight path.
 const SPECIAL_SHOTS := [
-	{"name": "FIRE TORNADO", "color": Color(1.0, 0.45, 0.08)},
-	{"name": "ETERNAL BLIZZARD", "color": Color(0.45, 0.85, 1.0)},
-	{"name": "THE EARTHQUAKE", "color": Color(0.62, 0.85, 0.28)},
-	{"name": "LIGHTNING ACCEL", "color": Color(1.0, 0.95, 0.25)},
-	{"name": "TIDAL WAVE", "color": Color(0.20, 0.55, 1.0)},
-	{"name": "DARK PHOENIX", "color": Color(0.85, 0.25, 0.95)},
+	{"name": "FIRE TORNADO", "color": Color(1.0, 0.45, 0.08), "curve": 2.2},
+	{"name": "ETERNAL BLIZZARD", "color": Color(0.45, 0.85, 1.0), "curve": -2.2},
+	{"name": "THE EARTHQUAKE", "color": Color(0.62, 0.85, 0.28), "curve": 0.0},
+	{"name": "LIGHTNING ACCEL", "color": Color(1.0, 0.95, 0.25), "curve": -0.8},
+	{"name": "TIDAL WAVE", "color": Color(0.20, 0.55, 1.0), "curve": 1.4},
+	{"name": "DARK PHOENIX", "color": Color(0.85, 0.25, 0.95), "curve": -1.6},
 ]
 
 ## Projects a normalized 2D field point onto the 3D world. Note the sign flip:
@@ -83,7 +153,7 @@ static func to_3d(p: Vector2, height := 0.0) -> Vector3:
 # Selectable formations grouped offensive / balanced / defensive. Each lists its
 # 11 players as [role, x, y] in the RED-side normalized field space (x negative);
 # the blue team mirrors x. Index 0 is always the goalkeeper. Picked on the
-# Choose Sides screen; consumed by MatchSimulation._create_teams().
+# Choose Sides screen; consumed by MatchSimulation.create_teams().
 const FORMATIONS := [
 	{"name": "4-4-2", "players": [
 		[PlayerRole.GOALKEEPER, -0.93, 0.0],

@@ -52,38 +52,38 @@ const SLOWMO_MS := 520
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
-	material_factory._build_materials()
+	material_factory.build_materials()
 	_build_scene_roots()
 	stadium_builder = StadiumBuilder.new()
 	stadium_builder.mf = material_factory
 	stadium_builder.host = self
 	stadium_builder.stadium_root = stadium_root
-	stadium_builder._build_environment()
-	stadium_builder._build_camera()
+	stadium_builder.build_environment()
+	stadium_builder.build_camera()
 	camera_rig = stadium_builder.camera_rig
 	camera_3d = stadium_builder.camera_3d
 	input_reader = InputReader.new()
 	input_reader.camera_3d = camera_3d
-	stadium_builder._build_lighting()
+	stadium_builder.build_lighting()
 	pitch_builder = PitchBuilder.new()
 	pitch_builder.mf = material_factory
 	pitch_builder.pitch_root = pitch_root
 	pitch_builder.lines_root = lines_root
 	pitch_builder.goals_root = goals_root
-	pitch_builder._build_pitch()
-	pitch_builder._build_goals()
-	stadium_builder._build_stadium()
+	pitch_builder.build_pitch()
+	pitch_builder.build_goals()
+	stadium_builder.build_stadium()
 	# Build and bake the GI probe over the static scene now — the procedural meshes
 	# are already in the tree, and baking here (before players are created) keeps the
 	# dynamic players out of the probe so only the static neon hoardings
 	# bounce coloured light onto the pitch.
-	stadium_builder._build_gi()
-	stadium_builder._bake_gi()
+	stadium_builder.build_gi()
+	stadium_builder.bake_gi()
 	hud = MatchHud.new()
 	add_child(hud)
-	hud._build_ui()
+	hud.build_ui()
 	settings = SettingsStore.new()
-	settings._setup_input_actions()
+	settings.setup_input_actions()
 	player_factory = PlayerFactory.new()
 	player_factory.mf = material_factory
 	ai = AIController.new()
@@ -95,7 +95,6 @@ func _ready() -> void:
 	sim.player_factory = player_factory
 	sim.ai = ai
 	sim.settings = settings
-	sim.view = view
 	ai.sim = sim
 	view.sim = sim
 	view.material_factory = material_factory
@@ -103,61 +102,82 @@ func _ready() -> void:
 	view.vfx_root = vfx_root
 	view.camera_rig = camera_rig
 	view.camera_3d = camera_3d
-	sim._create_teams()
-	view._create_ball()
-	view._create_ball_trail()
-	view._create_grass_marks()
+	sim.create_teams()
+	view.create_ball()
+	view.create_ball_trail()
+	view.create_grass_marks()
+	view.create_confetti()
 	audio = AudioManager.new()
 	add_child(audio)
-	audio._build_audio()
-	sim.audio = audio
+	audio.build_audio()
 	view.audio = audio
+	# Gameplay events -> presentation. The sim never touches view/audio directly.
+	sim.goal_scored.connect(view.trigger_goal)
+	sim.ball_kicked.connect(audio.play_kick)
+	sim.special_fired.connect(_begin_special_shot)
+	sim.field_reset.connect(view.reset_trail)
+	sim.restart_awarded.connect(_on_restart_awarded)
 	settings.audio = audio
-	settings._load_settings()
+	settings.load_settings()
 	menu = MenuManager.new()
 	add_child(menu)
 	menu.controller = self
 	menu.settings = settings
-	menu._build_menus()
+	menu.build_menus()
 	setup = MatchSetup.new()
 	add_child(setup)
 	setup.controller = self
 	setup.sim = sim
 	setup.build()
-	sim._reset_game(1)
+	sim.reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
 	print("Inazuma Eleven 3D environment ready")
 
-func _process(delta: float) -> void:
+# Gameplay advances on the fixed physics tick so shot/capture outcomes don't vary
+# with the render frame rate; rendering-side updates stay in _process below.
+func _physics_process(delta: float) -> void:
 	_update_time_scale()
-	if game_state == GameConfig.GameState.PLAYING:
-		if halftime_pause > 0.0:
-			halftime_pause = maxf(0.0, halftime_pause - delta)
-		elif goal_freeze > 0.0:
-			goal_freeze = maxf(0.0, goal_freeze - delta)
-			if goal_freeze <= 0.0:
-				# If the clock already ran out while celebrating the goal,
-				# end the half/match instead of restarting for a kickoff.
-				if match_time >= settings.half_length:
-					_end_half()
-				else:
-					sim._reset_game(sim.pending_kickoff_side)
-		else:
-			input_reader.read(sim.inputs, sim.team_device, sim.kickoff_timer)
-			var scorer := sim.step(delta)
-			if not sim.pending_special.is_empty():
-				_begin_special_shot(sim.pending_special)
-				sim.pending_special = {}
-			if scorer != 0:
-				_begin_goal_celebration(scorer)
+	if game_state != GameConfig.GameState.PLAYING:
+		return
+	if halftime_pause > 0.0:
+		halftime_pause = maxf(0.0, halftime_pause - delta)
+	elif goal_freeze > 0.0:
+		goal_freeze = maxf(0.0, goal_freeze - delta)
+		if goal_freeze <= 0.0:
+			# If the clock already ran out while celebrating the goal,
+			# end the half/match instead of restarting for a kickoff.
+			if match_time >= settings.half_length:
+				_end_half()
 			else:
-				_update_match_clock(delta)
-		view._update_visuals(delta)
+				sim.reset_game(sim.pending_kickoff_side)
+	else:
+		input_reader.read(sim.teams, sim.restart_timer)
+		var scorer := sim.step(delta)
+		if scorer != 0:
+			_begin_goal_celebration(scorer)
+		else:
+			_update_match_clock(delta)
+
+func _process(delta: float) -> void:
+	if game_state == GameConfig.GameState.PLAYING:
+		view.update_visuals(delta)
 	elif game_state == GameConfig.GameState.MATCH_SETUP:
 		setup.update(delta)
-	view._update_confetti(delta)
-	hud.update(sim.score_left, sim.score_right, game_state, sim.kickoff_timer, settings.half_length, match_time, current_half, delta)
+	view.update_confetti(delta)
+	hud.update(sim.score_left, sim.score_right, game_state, sim.restart_timer, sim.restart_type, settings.half_length, match_time, current_half, delta)
+	hud.update_stamina(_selected_stamina())
+
+## Sprint stamina of each human team's selected player (-1 hides that bar).
+func _selected_stamina() -> Array:
+	var values := [-1.0, -1.0]
+	if game_state != GameConfig.GameState.PLAYING:
+		return values
+	for t in 2:
+		var ts: TeamState = sim.teams[t]
+		if ts.is_human() and ts.selected_index >= 0 and ts.selected_index < ts.players.size():
+			values[t] = ts.players[ts.selected_index].stamina
+	return values
 
 ## Restores normal speed once a special-shot slow-mo has run its (wall-clock) course.
 func _update_time_scale() -> void:
@@ -169,7 +189,18 @@ func _begin_special_shot(info: Dictionary) -> void:
 	slowmo_until_ms = Time.get_ticks_msec() + SLOWMO_MS
 	Engine.time_scale = SLOWMO_SCALE
 	hud.show_banner("%s!" % info.name, info.color, 1.1, false)
-	audio._play_special()
+	audio.play_special()
+
+func _on_restart_awarded(type: int, team: int) -> void:
+	var labels := {
+		MatchSimulation.Restart.THROW_IN: "THROW-IN",
+		MatchSimulation.Restart.CORNER: "CORNER KICK",
+		MatchSimulation.Restart.GOAL_KICK: "GOAL KICK",
+	}
+	if not labels.has(type):
+		return
+	hud.show_banner(labels[type], sim.teams[team].kit.shirt, 1.0, false)
+	audio.play_whistle()
 
 func _begin_goal_celebration(scorer: int) -> void:
 	# Drop any active slow-mo, then freeze the field for the celebration. The confetti
@@ -177,9 +208,9 @@ func _begin_goal_celebration(scorer: int) -> void:
 	Engine.time_scale = 1.0
 	slowmo_until_ms = 0
 	goal_freeze = GOAL_FREEZE_TIME
-	var col: Color = sim.team_kit[0].shirt if scorer < 0 else sim.team_kit[1].shirt
+	var col: Color = sim.teams[0].kit.shirt if scorer < 0 else sim.teams[1].kit.shirt
 	hud.show_banner("GOAL!", col, GOAL_FREEZE_TIME)
-	audio._play_crowd_roar()
+	audio.play_crowd_roar()
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -207,7 +238,7 @@ func _set_game_state(next: int) -> void:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	var leaving_setup := game_state == GameConfig.GameState.MATCH_SETUP and next != GameConfig.GameState.MATCH_SETUP
 	game_state = next
-	view._set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
+	view.set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
 	if next == GameConfig.GameState.MATCH_SETUP:
 		setup.enter()
 	elif leaving_setup:
@@ -223,14 +254,14 @@ func _start_match() -> void:
 	goal_freeze = 0.0
 	Engine.time_scale = 1.0
 	slowmo_until_ms = 0
-	view._clear_confetti()
+	view.clear_confetti()
 	# Rebuild both teams from the formation/kit picked on the Choose Sides screen.
-	sim._create_teams()
-	hud.set_team_colors(sim.team_kit[0].shirt, sim.team_kit[1].shirt)
-	sim._set_default_ends()
-	sim._reset_game(1)
+	sim.create_teams()
+	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
+	sim.set_default_ends()
+	sim.reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
-	audio._play_whistle()
+	audio.play_whistle()
 
 func _update_match_clock(delta: float) -> void:
 	match_time += delta
@@ -243,15 +274,15 @@ func _end_half() -> void:
 		current_half = 2
 		match_time = 0.0
 		halftime_pause = 2.0
-		sim._switch_ends()
-		sim._reset_game(1)
-		audio._play_whistle()
+		sim.switch_ends()
+		sim.reset_game(1)
+		audio.play_whistle()
 		hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
 	else:
 		_end_match()
 
 func _end_match() -> void:
-	audio._play_whistle()
+	audio.play_whistle()
 	var result := "DRAW"
 	if sim.score_left > sim.score_right:
 		result = "TIME A WINS"

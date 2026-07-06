@@ -10,7 +10,7 @@ var glb_scene_cache := {}
 var player_anim_library: AnimationLibrary
 var player_anim_ready := false
 
-func _create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
+func create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
 	var glb_visual = _create_glb_player_visual(state, kit)
 	if glb_visual != null:
 		return glb_visual
@@ -19,42 +19,42 @@ func _create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
 	var boots_mat := _kit_mat(kit.boots)
 	var root := Node3D.new()
 	root.name = "PlayerA" if state.side == -1 else "PlayerB"
-	var body := mf._mesh("Body", BoxMesh.new(), shirt_mat, Vector3(0.0, 0.78, 0.0))
+	var body := mf.make_mesh("Body", BoxMesh.new(), shirt_mat, Vector3(0.0, 0.78, 0.0))
 	body.mesh.size = Vector3(0.42, 0.82, 0.26)
 	root.add_child(body)
-	var shorts := mf._mesh("Shorts", BoxMesh.new(), shorts_mat, Vector3(0.0, 0.42, 0.0))
+	var shorts := mf.make_mesh("Shorts", BoxMesh.new(), shorts_mat, Vector3(0.0, 0.42, 0.0))
 	shorts.mesh.size = Vector3(0.40, 0.26, 0.24)
 	root.add_child(shorts)
-	var head := mf._mesh("Head", SphereMesh.new(), mf.materials.skin, Vector3(0.0, 1.34, 0.0))
+	var head := mf.make_mesh("Head", SphereMesh.new(), mf.materials.skin, Vector3(0.0, 1.34, 0.0))
 	head.mesh.radius = 0.22
 	head.mesh.height = 0.42
 	root.add_child(head)
-	var hair := mf._mesh("Hair", SphereMesh.new(), mf.materials.hair, Vector3(0.0, 1.50, -0.02))
+	var hair := mf.make_mesh("Hair", SphereMesh.new(), mf.materials.hair, Vector3(0.0, 1.50, -0.02))
 	hair.mesh.radius = 0.19
 	hair.mesh.height = 0.18
 	root.add_child(hair)
 	for limb_name in ["ArmL", "ArmR", "LegL", "LegR"]:
 		var limb_mat: Material = shirt_mat if limb_name.begins_with("Arm") else boots_mat
-		var limb := mf._mesh(limb_name, BoxMesh.new(), limb_mat, Vector3.ZERO)
+		var limb := mf.make_mesh(limb_name, BoxMesh.new(), limb_mat, Vector3.ZERO)
 		limb.mesh.size = Vector3(0.13, 0.62, 0.13)
 		root.add_child(limb)
 	root.get_node("ArmL").position = Vector3(-0.32, 0.72, 0.0)
 	root.get_node("ArmR").position = Vector3(0.32, 0.72, 0.0)
 	root.get_node("LegL").position = Vector3(-0.13, 0.28, 0.0)
 	root.get_node("LegR").position = Vector3(0.13, 0.28, 0.0)
-	var marker := mf._mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
+	var marker := mf.make_mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
 	marker.mesh.top_radius = 0.48
 	marker.mesh.bottom_radius = 0.48
 	marker.mesh.height = 0.025
 	marker.visible = false
 	root.add_child(marker)
-	var next_marker := mf._mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
+	var next_marker := mf.make_mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
 	next_marker.mesh.top_radius = 0.48
 	next_marker.mesh.bottom_radius = 0.48
 	next_marker.mesh.height = 0.025
 	next_marker.visible = false
 	root.add_child(next_marker)
-	var power := mf._mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
+	var power := mf.make_mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
 	power.mesh.top_radius = 0.64
 	power.mesh.bottom_radius = 0.64
 	power.mesh.height = 0.025
@@ -68,19 +68,19 @@ func _create_glb_player_visual(state: PlayerState, kit: Dictionary):
 	root.name = "PlayerAGLB" if state.team_index == 0 else "PlayerBGLB"
 	state.uses_glb = true
 	state.node = root
-	var marker := mf._mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
+	var marker := mf.make_mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
 	marker.mesh.top_radius = 0.48
 	marker.mesh.bottom_radius = 0.48
 	marker.mesh.height = 0.025
 	marker.visible = false
 	root.add_child(marker)
-	var next_marker := mf._mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
+	var next_marker := mf.make_mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
 	next_marker.mesh.top_radius = 0.48
 	next_marker.mesh.bottom_radius = 0.48
 	next_marker.mesh.height = 0.025
 	next_marker.visible = false
 	root.add_child(next_marker)
-	var power := mf._mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
+	var power := mf.make_mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
 	power.mesh.top_radius = 0.64
 	power.mesh.bottom_radius = 0.64
 	power.mesh.height = 0.025

@@ -12,7 +12,7 @@ var menu_layer: CanvasLayer
 var menu_panels := {}
 var fulltime_label: Label
 
-func _build_menus() -> void:
+func build_menus() -> void:
 	menu_layer = CanvasLayer.new()
 	menu_layer.name = "MenuUI"
 	menu_layer.layer = 2

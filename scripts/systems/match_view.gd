@@ -19,9 +19,16 @@ var camera_3d: Camera3D
 
 var ball_trail: Array[MeshInstance3D] = []
 var ball_trail_points: Array[Vector3] = []
-var confetti: Array[VfxParticle] = []
 var celebration_timer := 0.0
 var camera_look := Vector3.ZERO
+
+# Goal confetti: three pre-built MultiMeshes (gold/red/blue), one draw call each,
+# so a goal never allocates nodes. Dead pieces are hidden with a zero-scale basis.
+const CONFETTI_PER_COLOR := 48
+var confetti_mms: Array[MultiMesh] = []
+var confetti_vel: Array = []      # per pool: PackedVector3Array
+var confetti_life: Array = []     # per pool: PackedFloat32Array
+var confetti_cursor: Array[int] = []
 
 # Ball grass-trail: a ring buffer of Decal nodes pressed into the turf along the
 # ball's ground path, each fading over MARK_LIFETIME seconds.
@@ -41,14 +48,44 @@ func reset_trail() -> void:
 	# existing grass marks keep fading naturally.
 	last_mark_pos = Vector2(1.0e9, 1.0e9)
 
-## Immediately removes any live confetti particles (called on match start so
+## Immediately hides any live confetti particles (called on match start so
 ## leftover pieces from the previous match don't bleed into the new one).
-func _clear_confetti() -> void:
-	for p in confetti:
-		p.node.queue_free()
-	confetti.clear()
+func clear_confetti() -> void:
+	for pool in confetti_mms.size():
+		for slot in CONFETTI_PER_COLOR:
+			confetti_life[pool][slot] = 0.0
+			confetti_mms[pool].set_instance_transform(slot, _hidden_xform())
 
-func _create_ball() -> void:
+func _hidden_xform() -> Transform3D:
+	return Transform3D(Basis().scaled(Vector3.ZERO), Vector3(0.0, -10.0, 0.0))
+
+## Builds the confetti MultiMesh pools once at startup.
+func create_confetti() -> void:
+	var mats: Array = [material_factory.materials.confetti_gold,
+			material_factory.materials.confetti_red,
+			material_factory.materials.confetti_blue]
+	for mat in mats:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		var piece := BoxMesh.new()
+		piece.size = Vector3(0.10, 0.035, 0.16)
+		mm.mesh = piece
+		mm.instance_count = CONFETTI_PER_COLOR
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "ConfettiPool"
+		mmi.multimesh = mm
+		mmi.material_override = mat
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		vfx_root.add_child(mmi)
+		confetti_mms.append(mm)
+		confetti_vel.append(PackedVector3Array())
+		confetti_vel[-1].resize(CONFETTI_PER_COLOR)
+		confetti_life.append(PackedFloat32Array())
+		confetti_life[-1].resize(CONFETTI_PER_COLOR)
+		confetti_cursor.append(0)
+	clear_confetti()
+
+func create_ball() -> void:
 	var root := Node3D.new()
 	root.name = "Ball3D"
 	if not _add_ball_glb(root):
@@ -60,7 +97,7 @@ func _create_ball() -> void:
 	glow.omni_range = 5.0
 	root.add_child(glow)
 	# Elemental aura orb, hidden until a named special shot is in flight.
-	var aura := material_factory._mesh("SpecialAura", SphereMesh.new(), material_factory.materials.special_aura, Vector3.ZERO)
+	var aura := material_factory.make_mesh("SpecialAura", SphereMesh.new(), material_factory.materials.special_aura, Vector3.ZERO)
 	(aura.mesh as SphereMesh).radius = GameConfig.BALL_RADIUS * 2.2
 	(aura.mesh as SphereMesh).height = GameConfig.BALL_RADIUS * 4.4
 	aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -91,16 +128,16 @@ func _add_ball_glb(root: Node3D) -> bool:
 	return true
 
 func _add_fallback_ball(root: Node3D) -> void:
-	var mesh := material_factory._mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)
+	var mesh := material_factory.make_mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)
 	mesh.mesh.radius = GameConfig.BALL_RADIUS
 	mesh.mesh.height = GameConfig.BALL_RADIUS * 2.0
 	mesh.mesh.radial_segments = 32
 	mesh.mesh.rings = 16
 	root.add_child(mesh)
 
-func _create_ball_trail() -> void:
+func create_ball_trail() -> void:
 	for i in 10:
-		var trail := material_factory._mesh("BallTrail%d" % i, SphereMesh.new(), material_factory.materials.trail, Vector3.ZERO)
+		var trail := material_factory.make_mesh("BallTrail%d" % i, SphereMesh.new(), material_factory.materials.trail, Vector3.ZERO)
 		trail.mesh.radius = 0.12 - float(i) * 0.007
 		trail.mesh.height = trail.mesh.radius * 2.0
 		trail.visible = false
@@ -109,9 +146,9 @@ func _create_ball_trail() -> void:
 
 ## Pool of decals that mark the grass where the ball rolls. Built once; all hidden
 ## until the ball moves over them. Shared albedo/normal textures (one each).
-func _create_grass_marks() -> void:
-	var albedo := material_factory._decal_albedo_texture()
-	var normal := material_factory._decal_normal_texture()
+func create_grass_marks() -> void:
+	var albedo := material_factory.decal_albedo_texture()
+	var normal := material_factory.decal_normal_texture()
 	for i in 48:
 		var mark := Decal.new()
 		mark.name = "GrassMark%d" % i
@@ -127,11 +164,11 @@ func _create_grass_marks() -> void:
 		grass_marks.append(mark)
 		grass_mark_life.append(0.0)
 
-func _update_visuals(delta: float) -> void:
-	for i in sim.team_red.size():
-		_update_player_visual(sim.team_red[i], i, sim.ball.owner_team == 0 and sim.ball.owner_index == i, delta)
-	for i in sim.team_blue.size():
-		_update_player_visual(sim.team_blue[i], i, sim.ball.owner_team == 1 and sim.ball.owner_index == i, delta)
+func update_visuals(delta: float) -> void:
+	for t in 2:
+		var players := sim.teams[t].players
+		for i in players.size():
+			_update_player_visual(players[i], i, sim.ball.owner_team == t and sim.ball.owner_index == i, delta)
 	_update_ball_visual(delta)
 	_update_camera(delta)
 	if celebration_timer > 0.0:
@@ -153,8 +190,8 @@ func _update_player_visual(p: PlayerState, player_index: int, owns_ball: bool, d
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
 	var t := p.team_index
-	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
-	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
+	var is_selected := sim.team_is_human(t) and player_index == sim.teams[t].selected_index
+	var is_candidate := sim.team_is_human(t) and player_index == sim.teams[t].switch_candidate
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
@@ -180,8 +217,8 @@ func _update_glb_player_visual(p: PlayerState, player_index: int, owns_ball: boo
 	p.prev_x = p.x
 	p.prev_y = p.y
 	var t := p.team_index
-	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
-	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
+	var is_selected := sim.team_is_human(t) and player_index == sim.teams[t].selected_index
+	var is_candidate := sim.team_is_human(t) and player_index == sim.teams[t].switch_candidate
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
@@ -220,7 +257,8 @@ func _update_ball_visual(delta: float) -> void:
 	if sim.ball.node == null:
 		return
 	var speed := Vector2(sim.ball.vx, sim.ball.vy).length()
-	var visual_height := 0.26 + minf(0.55, speed * 0.22)
+	# The ball's simulated flight height, plus its radius so it rests on the turf.
+	var visual_height := GameConfig.BALL_RADIUS + 0.06 + sim.ball.h
 	sim.ball.node.position = GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), visual_height)
 	sim.ball.node.rotate_x(speed * delta * 14.0)
 	sim.ball.node.rotate_z(sim.ball.spin * delta)
@@ -262,7 +300,7 @@ func _update_grass_marks(speed: float, delta: float) -> void:
 		return
 	var ground := GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.3)
 	var ground2 := Vector2(ground.x, ground.z)
-	if speed > 0.04 and ground2.distance_to(last_mark_pos) > MARK_SPACING:
+	if speed > 0.04 and sim.ball.h < 0.25 and ground2.distance_to(last_mark_pos) > MARK_SPACING:
 		last_mark_pos = ground2
 		var mark := grass_marks[grass_mark_index]
 		var sc := randf_range(0.85, 1.3)
@@ -316,41 +354,47 @@ func _update_camera(delta: float) -> void:
 	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)
 
-func _trigger_goal(_scorer: int) -> void:
+func trigger_goal(_scorer: int) -> void:
 	celebration_timer = 1.5
 	_spawn_confetti()
-	audio._play_whistle()
+	audio.play_whistle()
 
 func _spawn_confetti() -> void:
+	if confetti_mms.is_empty():
+		return
 	for i in 72:
-		var mat: Material = material_factory.materials.confetti_gold
-		if i % 3 == 0:
-			mat = material_factory.materials.confetti_red
-		elif i % 3 == 1:
-			mat = material_factory.materials.confetti_blue
-		var piece := material_factory._mesh("Confetti", BoxMesh.new(), mat, GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
-		piece.mesh.size = Vector3(0.10, 0.035, 0.16)
-		vfx_root.add_child(piece)
-		var velocity := Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
-		confetti.append(VfxParticle.new(piece, velocity, randf_range(1.2, 2.3)))
+		var pool := i % confetti_mms.size()
+		var slot: int = confetti_cursor[pool]
+		confetti_cursor[pool] = (slot + 1) % CONFETTI_PER_COLOR
+		var origin := GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2))
+		var basis := Basis.from_euler(Vector3(randf() * TAU, randf() * TAU, 0.0))
+		confetti_mms[pool].set_instance_transform(slot, Transform3D(basis, origin))
+		confetti_vel[pool][slot] = Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
+		confetti_life[pool][slot] = randf_range(1.2, 2.3)
 
-func _update_confetti(delta: float) -> void:
-	for i in range(confetti.size() - 1, -1, -1):
-		var p := confetti[i]
-		p.life -= delta
-		p.velocity.y -= 4.8 * delta
-		p.node.position += p.velocity * delta
-		p.node.rotate_x(delta * 8.0)
-		p.node.rotate_y(delta * 10.0)
-		if p.life <= 0.0:
-			p.node.queue_free()
-			confetti.remove_at(i)
+func update_confetti(delta: float) -> void:
+	for pool in confetti_mms.size():
+		var mm: MultiMesh = confetti_mms[pool]
+		for slot in CONFETTI_PER_COLOR:
+			var life: float = confetti_life[pool][slot]
+			if life <= 0.0:
+				continue
+			life -= delta
+			confetti_life[pool][slot] = life
+			if life <= 0.0:
+				mm.set_instance_transform(slot, _hidden_xform())
+				continue
+			var vel: Vector3 = confetti_vel[pool][slot]
+			vel.y -= 4.8 * delta
+			confetti_vel[pool][slot] = vel
+			var xform := mm.get_instance_transform(slot)
+			xform.origin += vel * delta
+			xform.basis = xform.basis.rotated(Vector3.RIGHT, delta * 8.0).rotated(Vector3.UP, delta * 10.0)
+			mm.set_instance_transform(slot, xform)
 
-func _set_glb_animations_paused(paused: bool) -> void:
+func set_glb_animations_paused(paused: bool) -> void:
 	var speed := 0.0 if paused else 1.0
-	for p in sim.team_red:
-		if p.animation_player != null:
-			p.animation_player.speed_scale = speed
-	for p in sim.team_blue:
-		if p.animation_player != null:
-			p.animation_player.speed_scale = speed
+	for ts in sim.teams:
+		for p in ts.players:
+			if p.animation_player != null:
+				p.animation_player.speed_scale = speed
