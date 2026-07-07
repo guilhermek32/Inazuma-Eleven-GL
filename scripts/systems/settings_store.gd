@@ -8,6 +8,8 @@ extends RefCounted
 var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard
 var ai_speed_mult := 1.0
 var ai_decision_mult := 1.0
+var ai_think_mult := 1.0       # scales the AI think interval (lower = faster thinking)
+var ai_aim_error := 0.03       # shot aim noise (normalized field units)
 var camera_angle := 1          # 0 Low, 1 Broadcast, 2 High, 3 Top-down
 var cam_height_mult := 1.0     # derived from camera_angle in _apply_settings()
 var cam_dist_mult := 1.0
@@ -31,10 +33,12 @@ func save() -> void:
 	_save_settings()
 
 func _apply_settings() -> void:
+	# Difficulty is intelligence, not velocity: harder AI thinks faster, aims
+	# better and lunges more decisively; the speed spread stays nearly flat.
 	match difficulty:
-		0: ai_speed_mult = 0.80; ai_decision_mult = 0.5
-		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0
-		2: ai_speed_mult = 1.25; ai_decision_mult = 2.0
+		0: ai_speed_mult = 0.95; ai_decision_mult = 0.7; ai_think_mult = 1.5; ai_aim_error = GameConfig.AI_AIM_ERROR[0]
+		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0; ai_think_mult = 1.0; ai_aim_error = GameConfig.AI_AIM_ERROR[1]
+		2: ai_speed_mult = 1.05; ai_decision_mult = 1.4; ai_think_mult = 0.7; ai_aim_error = GameConfig.AI_AIM_ERROR[2]
 	# Camera presets: higher height_mult + lower dist_mult => steeper, more top-down angle.
 	match camera_angle:
 		0: cam_height_mult = 0.66; cam_dist_mult = 1.12   # Low / cinematic

@@ -28,6 +28,14 @@ func _initialize() -> void:
 	_test_stats_tracking()
 	_test_gk_dive_triggers()
 	_test_rain_friction()
+	_test_arrive_dead_zone()
+	_test_pass_prefers_runner()
+	_test_gk_holding_never_own_goals()
+	_test_ai_think_cadence()
+	_test_ai_shot_picks_far_corner()
+	_test_ai_run_finds_space()
+	_test_ai_defender_marks_goal_side()
+	_test_difficulty_is_not_speed()
 	_test_restart_clears_space()
 	_test_restart_shield_blocks_steal()
 	_test_restart_shield_expires()
@@ -325,6 +333,156 @@ func _test_rain_friction() -> void:
 	_check(dist[GameConfig.RAIN_BALL_FRICTION] > dist[GameConfig.BALL_FRICTION],
 			"the wet ball skids farther than the dry ball")
 	sim.free()
+
+func _test_arrive_dead_zone() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	var p: PlayerState = sim.teams[0].players[9]
+	p.x = 0.2
+	p.y = 0.2
+	p.vel_x = 0.0
+	p.vel_y = 0.0
+	p.is_moving = false
+	sim.move_towards(p, Vector2(0.21, 0.2), p.speed, 0.05)
+	_check(absf(p.x - 0.2) < 0.0001 and not p.is_moving, "a player already at their spot stands still instead of shuffling")
+	sim.free()
+
+func _test_pass_prefers_runner() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	# Two attackers mirror-placed; only one is running toward goal. The pass
+	# scoring must prefer the runner (through ball onto the led pass).
+	var carrier: PlayerState = sim.teams[0].players[5]
+	carrier.x = 0.0
+	carrier.y = 0.0
+	var runner: PlayerState = sim.teams[0].players[9]
+	runner.x = 0.3
+	runner.y = 0.3
+	runner.vel_x = 0.2
+	var walker: PlayerState = sim.teams[0].players[10]
+	walker.x = 0.3
+	walker.y = -0.3
+	for opp in sim.teams[1].players:
+		opp.x = -0.8
+	var pick: PlayerState = sim.ai.best_pass_target(carrier, sim.teams[0].players, sim.teams[1].players, GameConfig.FIELD_BOUNDARY_X)
+	_check(pick == runner, "the pass targets the teammate running toward goal")
+	sim.free()
+
+func _test_gk_holding_never_own_goals() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	# Regression: a keeper who caught the ball while retreating faced his own
+	# net, the dribble lead pushed the glued ball over the line, and his
+	# clearance kicked off from inside the goal — an instant own goal.
+	var keeper: PlayerState = sim.teams[1].players[0]
+	keeper.x = 0.92
+	keeper.y = 0.0
+	keeper.facing_x = 1.0   # facing his own goal
+	keeper.facing_y = 0.0
+	keeper.vel_x = 0.4      # arrived at speed, maximizing the dribble lead
+	sim._set_owner(1, 0)
+	sim.ball.x = 0.95       # ball already carried past the line
+	sim.ball.y = 0.0
+	var scorer := 0
+	for i in 30:
+		scorer = sim.step(1.0 / 60.0)
+		if scorer != 0:
+			break
+	_check(scorer == 0, "a keeper holding the ball can never concede an own goal")
+	_check(sim.ball.x < GameConfig.FIELD_BOUNDARY_X - 0.015, "the held ball is clamped back inside the field")
+	sim.free()
+
+func _test_ai_think_cadence() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	# Red attacker alone in front of the +x goal with the whole blue team pushed
+	# away: with the think timer armed no kick fires; once it expires the carrier
+	# decides (and in this setup, shoots).
+	var p: PlayerState = sim.teams[0].players[9]
+	p.x = 0.75
+	p.y = 0.0
+	p.facing_x = 1.0
+	p.facing_y = 0.0
+	for opp in sim.teams[1].players:
+		opp.x = -0.8
+	sim._set_owner(0, 9)
+	sim.ball.x = p.x
+	sim.ball.y = p.y
+	p.think_timer = 10.0
+	for i in 5:
+		sim.ai.update_ai_player(p, sim.teams[0].players, sim.teams[1].players, 0, 9, 0.05, false)
+	_check(sim.ball.owner_team == 0, "no decision fires while the think timer is armed")
+	p.think_timer = 0.0
+	sim.ai.update_ai_player(p, sim.teams[0].players, sim.teams[1].players, 0, 9, 0.05, false)
+	_check(sim.ball.owner_team == -1 and sim.stats[0].shots >= 1, "on the think tick the open carrier shoots")
+	sim.free()
+
+func _test_ai_shot_picks_far_corner() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	var p: PlayerState = sim.teams[0].players[9]
+	p.x = 0.6
+	p.y = 0.0
+	var keeper: PlayerState = sim.teams[1].players[0]
+	keeper.y = 0.06   # keeper dragged toward +y
+	var aim := sim.ai.pick_shot_target(p, sim.teams[1].players, GameConfig.FIELD_BOUNDARY_X, 0.0)
+	_check(aim.y < 0.0, "the AI shoots at the corner away from the keeper")
+	keeper.y = -0.06
+	aim = sim.ai.pick_shot_target(p, sim.teams[1].players, GameConfig.FIELD_BOUNDARY_X, 0.0)
+	_check(aim.y > 0.0, "...on either side")
+	sim.free()
+
+func _test_ai_run_finds_space() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	# Crowd the +y channel with blue players: a red attacker's run must head for
+	# a channel with more clearance than the crowded one.
+	var p: PlayerState = sim.teams[0].players[9]
+	p.x = 0.2
+	p.y = 0.0
+	for i in range(1, 6):
+		sim.teams[1].players[i].x = 0.35
+		sim.teams[1].players[i].y = 0.45
+	var run := sim.ai.pick_run_target(p, sim.teams[1].players, 1.0)
+	_check(run.y < 0.45 - 0.1, "the run target avoids the crowded channel")
+	var line := sim.second_defender_line(sim.teams[1].players, 1.0)
+	_check(run.x <= line - 0.019, "the run stays onside of the second defender")
+	sim.free()
+
+func _test_ai_defender_marks_goal_side() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	sim._clear_owner()
+	# Loose ball at midfield; a blue striker lurks between the ball and the red
+	# goal. The nearest red defender must be told to mark him goal-side.
+	sim.ball.x = 0.0
+	sim.ball.y = 0.0
+	var striker: PlayerState = sim.teams[1].players[9]
+	striker.x = -0.5
+	striker.y = 0.1
+	var marker: PlayerState = sim.teams[0].players[1]   # a red defender
+	marker.x = -0.55
+	marker.y = 0.05
+	var mark := sim.ai.mark_target_for(marker, sim.teams[0].players, sim.teams[1].players, 1)
+	_check(mark.x != INF, "the nearest defender is assigned the dangerous striker")
+	_check(mark.x < striker.x and absf(mark.y - striker.y) < 0.1, "the marking spot is goal-side of the striker")
+	sim.free()
+
+func _test_difficulty_is_not_speed() -> void:
+	var settings := SettingsStore.new()
+	settings.difficulty = 2
+	settings._apply_settings()
+	var hard_speed := settings.ai_speed_mult
+	var hard_think := settings.ai_think_mult
+	var hard_aim := settings.ai_aim_error
+	settings.difficulty = 0
+	settings._apply_settings()
+	_check(hard_speed <= 1.05 and settings.ai_speed_mult >= 0.95, "difficulty barely touches movement speed")
+	_check(hard_think < settings.ai_think_mult, "hard AI thinks faster than easy AI")
+	_check(hard_aim < settings.ai_aim_error, "hard AI aims more precisely than easy AI")
 
 func _test_restart_clears_space() -> void:
 	var sim := _make_sim()

@@ -36,6 +36,16 @@ var gk_shot_active := false
 # the view plays/poses a dive toward gk_dive_dir (±1 in field y).
 var gk_dive_timer := 0.0
 var gk_dive_dir := 0
+# AI decision state: the carrier decides on think ticks and commits to its
+# chosen dribble direction between them; off-ball players make staggered runs.
+var think_timer := 0.0
+var dribble_dir := Vector2.ZERO
+var run_timer := 0.0          # counts down to this player's next off-ball run
+var run_hold := 0.0           # remaining seconds committed to run_target
+var run_target := Vector2.ZERO
+# Personality: small per-player variation so the team never acts in lockstep.
+var decide_jitter := 1.0      # scales think/run intervals (0.8–1.2)
+var aggression := 1.0         # scales shoot eagerness (0.8–1.2)
 var node: Node3D
 var uses_glb := false
 var animation_player: AnimationPlayer

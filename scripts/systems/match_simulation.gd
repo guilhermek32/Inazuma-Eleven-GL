@@ -134,6 +134,9 @@ func _assign_jerseys(players: Array[PlayerState]) -> void:
 
 func _add_player(ts: TeamState, px: float, py: float, speed: float, side: int, role: int) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)
+	# Personality: small per-player variation so decisions and runs de-sync.
+	state.decide_jitter = randf_range(0.8, 1.2)
+	state.aggression = randf_range(0.8, 1.2)
 	if player_factory != null and players_root != null:
 		state.node = player_factory.create_player_visual(state, ts.kit)
 		players_root.add_child(state.node)
@@ -191,6 +194,10 @@ func _reset_players(players: Array[PlayerState]) -> void:
 		p.gk_react_timer = 0.0
 		p.gk_dive_timer = 0.0
 		p.gk_dive_dir = 0
+		p.think_timer = 0.0
+		p.dribble_dir = Vector2.ZERO
+		p.run_timer = randf_range(1.0, GameConfig.AI_RUN_INTERVAL_MAX)   # stagger first runs
+		p.run_hold = 0.0
 
 func _team_index_for_side(side: int) -> int:
 	if not teams[0].players.is_empty() and teams[0].players[0].side == side:
@@ -240,10 +247,15 @@ func _update_ball(delta: float) -> int:
 		# the faster the carrier runs, with smoothing so it lags and swings around
 		# on sharp turns instead of being welded to the boots.
 		var carrier_speed := Vector2(owner.vel_x, owner.vel_y).length()
-		var lead := 0.035 + carrier_speed * GameConfig.DRIBBLE_LEAD
+		var lead := minf(0.035 + carrier_speed * GameConfig.DRIBBLE_LEAD, 0.08)
 		var chase := 1.0 - exp(-GameConfig.DRIBBLE_SMOOTH * delta)
 		ball.x = lerpf(ball.x, owner.x + owner.facing_x * lead, chase)
 		ball.y = lerpf(ball.y, owner.y + owner.facing_y * lead, chase)
+		# A glued ball never crosses the lines: a keeper facing his own net (or a
+		# carrier hugging the touchline) must not push it out of play — kicks
+		# would otherwise launch from inside the goal and score instantly.
+		ball.x = clampf(ball.x, -GameConfig.FIELD_BOUNDARY_X + 0.02, GameConfig.FIELD_BOUNDARY_X - 0.02)
+		ball.y = clampf(ball.y, -GameConfig.FIELD_BOUNDARY_Y + 0.02, GameConfig.FIELD_BOUNDARY_Y - 0.02)
 		ball.vx = 0.0
 		ball.vy = 0.0
 		ball.h = 0.0
@@ -634,16 +646,21 @@ func _shot_on_target(p: PlayerState) -> bool:
 
 ## Snapshots the offside line at the moment of a pass: teammates in the attacking
 ## half, ahead of the ball and beyond the second-to-last defender are flagged.
+## Depth (in `attack`-direction units, bigger = deeper) of the defending side's
+## second-to-last man — the offside line, also used by AI runs to stay onside.
+func second_defender_line(defenders: Array[PlayerState], attack: float) -> float:
+	var depths: Array[float] = []
+	for opp in defenders:
+		depths.append(opp.x * attack)
+	depths.sort()
+	depths.reverse()
+	return depths[1] if depths.size() >= 2 else 0.0
+
 func _flag_offside_receivers(kicker: PlayerState) -> void:
 	offside_team = kicker.team_index
 	var attack := -float(kicker.side)   # attacking direction sign on x
 	# Second-to-last defender depth (the keeper is usually the last man).
-	var depths: Array[float] = []
-	for opp in teams[1 - kicker.team_index].players:
-		depths.append(opp.x * attack)
-	depths.sort()
-	depths.reverse()
-	var line: float = depths[1] if depths.size() >= 2 else 0.0
+	var line := second_defender_line(teams[1 - kicker.team_index].players, attack)
 	for mate in teams[kicker.team_index].players:
 		if mate == kicker:
 			continue
@@ -748,7 +765,17 @@ func _resolve_ball_capture() -> void:
 
 func move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
-	if diff.length() > 0.005:
+	var dist := diff.length()
+	# Keepers keep pinpoint tracking (saves depend on it); everyone else eases
+	# into position and stands still inside the dead zone instead of vibrating
+	# on top of their target.
+	if p.role != GameConfig.PlayerRole.GOALKEEPER:
+		if dist <= GameConfig.ARRIVE_DEADZONE:
+			apply_movement(p, Vector2.ZERO, delta)
+			return
+		if dist < GameConfig.ARRIVE_RADIUS:
+			current_speed *= clampf(dist / GameConfig.ARRIVE_RADIUS, 0.35, 1.0)
+	if dist > 0.005:
 		apply_movement(p, diff.normalized() * current_speed, delta)
 	else:
 		apply_movement(p, Vector2.ZERO, delta)

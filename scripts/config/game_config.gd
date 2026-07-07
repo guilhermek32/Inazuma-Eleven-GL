@@ -103,9 +103,25 @@ const AI_SHOOT_RATE := 3.0
 const AI_PASS_RATE := 1.8
 const AI_SHOOT_RANGE_FACING := 0.50  # shooting range when facing the goal
 const AI_SHOOT_RANGE := 0.30         # shooting range otherwise
-const PASS_OPENNESS_RADIUS := 0.18   # receiver counts as marked inside this radius
-const PASS_LANE_RADIUS := 0.05       # opponent this close to the passing lane blocks it
+const PASS_OPENNESS_RADIUS := 0.12   # receiver counts as marked inside this radius
+const PASS_LANE_RADIUS := 0.035      # opponent this close to the passing lane blocks it
+const PASS_RUNNER_BONUS := 6.0       # pass-score bonus per unit of receiver velocity toward goal
+const PASS_BOX_BONUS := 1.5          # bonus for receivers already near the goal
 const PASS_BACKWARD_PENALTY := 2.5   # score malus for passing away from goal
+# AI intelligence. Decisions fire on think ticks (not per-frame dice) and
+# difficulty adjusts thinking speed / aim quality rather than movement speed.
+const AI_THINK_INTERVAL := 0.28      # seconds between carrier decisions (× difficulty × jitter)
+const AI_AIM_ERROR := [0.05, 0.03, 0.012]   # shot aim noise by difficulty (Easy/Normal/Hard)
+const AI_RUN_INTERVAL_MIN := 4.0     # seconds between an off-ball player's runs
+const AI_RUN_INTERVAL_MAX := 7.0
+const AI_RUN_DURATION := 2.0         # how long a run is committed to before reverting
+const AI_MARK_DIST := 0.06           # goal-side marking distance from the marked opponent
+const AI_DRIBBLE_SAMPLES := 5        # directions sampled when dribbling into space
+# Arrive behavior: off-ball players ease into their targets and stand inside the
+# dead zone instead of micro-shuffling on top of it forever.
+const ARRIVE_RADIUS := 0.08
+const ARRIVE_DEADZONE := 0.02
+
 # Keeper reaction delay (s) to an inbound shot, by difficulty (Easy/Normal/Hard).
 const GK_REACTION := [0.28, 0.20, 0.12]
 const GK_SHOT_SPEED := 0.5           # ball speed toward goal that reads as a shot
