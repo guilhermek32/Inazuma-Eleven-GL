@@ -42,17 +42,22 @@ func create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
 	root.get_node("ArmR").position = Vector3(0.32, 0.72, 0.0)
 	root.get_node("LegL").position = Vector3(-0.13, 0.28, 0.0)
 	root.get_node("LegR").position = Vector3(0.13, 0.28, 0.0)
-	var marker := mf.make_mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
-	marker.mesh.top_radius = 0.48
-	marker.mesh.bottom_radius = 0.48
-	marker.mesh.height = 0.025
-	marker.visible = false
+	_add_ground_markers(root)
+	root.add_child(_jersey_label(1.85))
+	return root
+
+## Shared per-player ground furniture: selection/next rings (thin torus outlines
+## instead of filled discs), the charge power ring and a soft blob shadow that
+## keeps players grounded when the real floodlight shadows fade at distance.
+func _add_ground_markers(root: Node3D) -> void:
+	var blob := mf.make_mesh("BlobShadow", QuadMesh.new(), _blob_shadow_material(), Vector3(0.0, 0.03, 0.0))
+	blob.mesh.size = Vector2(1.1, 1.1)
+	blob.rotation_degrees.x = -90.0
+	blob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(blob)
+	var marker := _ring_marker("SelectedRing", mf.materials.selection, 0.46)
 	root.add_child(marker)
-	var next_marker := mf.make_mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
-	next_marker.mesh.top_radius = 0.48
-	next_marker.mesh.bottom_radius = 0.48
-	next_marker.mesh.height = 0.025
-	next_marker.visible = false
+	var next_marker := _ring_marker("NextRing", mf.materials.selection_next, 0.46)
 	root.add_child(next_marker)
 	var power := mf.make_mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
 	power.mesh.top_radius = 0.64
@@ -60,32 +65,27 @@ func create_player_visual(state: PlayerState, kit: Dictionary) -> Node3D:
 	power.mesh.height = 0.025
 	power.visible = false
 	root.add_child(power)
-	root.add_child(_jersey_label(1.85))
-	return root
+
+func _ring_marker(ring_name: String, mat: Material, radius: float) -> MeshInstance3D:
+	var ring := mf.make_mesh(ring_name, TorusMesh.new(), mat, Vector3(0.0, 0.035, 0.0))
+	ring.mesh.inner_radius = radius - 0.06
+	ring.mesh.outer_radius = radius
+	ring.scale.y = 0.3   # flatten the torus tube into a ground outline
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.visible = false
+	return ring
+
+func _blob_shadow_material() -> StandardMaterial3D:
+	if not mf.materials.has("blob_shadow"):
+		mf.materials.blob_shadow = mf.make_blob_shadow_material()
+	return mf.materials.blob_shadow
 
 func _create_glb_player_visual(state: PlayerState, kit: Dictionary):
 	var root := Node3D.new()
 	root.name = "PlayerAGLB" if state.team_index == 0 else "PlayerBGLB"
 	state.uses_glb = true
 	state.node = root
-	var marker := mf.make_mesh("SelectedRing", CylinderMesh.new(), mf.materials.selection, Vector3(0.0, 0.035, 0.0))
-	marker.mesh.top_radius = 0.48
-	marker.mesh.bottom_radius = 0.48
-	marker.mesh.height = 0.025
-	marker.visible = false
-	root.add_child(marker)
-	var next_marker := mf.make_mesh("NextRing", CylinderMesh.new(), mf.materials.selection_next, Vector3(0.0, 0.035, 0.0))
-	next_marker.mesh.top_radius = 0.48
-	next_marker.mesh.bottom_radius = 0.48
-	next_marker.mesh.height = 0.025
-	next_marker.visible = false
-	root.add_child(next_marker)
-	var power := mf.make_mesh("PowerRing", CylinderMesh.new(), mf.materials.power, Vector3(0.0, 0.07, 0.0))
-	power.mesh.top_radius = 0.64
-	power.mesh.bottom_radius = 0.64
-	power.mesh.height = 0.025
-	power.visible = false
-	root.add_child(power)
+	_add_ground_markers(root)
 	# Load the character mesh once and drive its skeleton with retargeted Mixamo clips.
 	var model: Node3D = _instantiate_glb(GameConfig.PLAYER_ASSET_DIR + GameConfig.PLAYER_MESH_FILE)
 	if model == null:

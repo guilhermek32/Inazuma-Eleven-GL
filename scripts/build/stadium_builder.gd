@@ -20,6 +20,14 @@ var camera_rig: Node3D
 var camera_3d: Camera3D
 var voxel_gi: VoxelGI
 var rain: GPUParticles3D
+# Environment handle kept so weather can retune fog/ambience at runtime.
+var env: Environment
+
+# Fog/ambience per weather: clear stays a faint haze; rain gets denser and dimmer.
+const FOG_DENSITY_CLEAR := 0.004
+const FOG_DENSITY_RAIN := 0.006
+const AMBIENT_ENERGY_CLEAR := 0.4
+const AMBIENT_ENERGY_RAIN := 0.28
 
 ## One GPU particle emitter of falling streak quads over the pitch; built once,
 ## toggled by set_rain_active() when the Weather setting changes.
@@ -57,11 +65,15 @@ func set_rain_active(active: bool) -> void:
 		return
 	rain.emitting = active
 	rain.visible = active
+	# Rain nights read moodier: slightly denser fog and dimmer ambient fill.
+	if env != null:
+		env.volumetric_fog_density = FOG_DENSITY_RAIN if active else FOG_DENSITY_CLEAR
+		env.ambient_light_energy = AMBIENT_ENERGY_RAIN if active else AMBIENT_ENERGY_CLEAR
 
 func build_environment() -> void:
 	var world := WorldEnvironment.new()
 	world.name = "WorldEnvironment"
-	var env := Environment.new()
+	env = Environment.new()
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
 	sky_mat.sky_top_color = Color(0.010, 0.018, 0.045)
@@ -74,8 +86,9 @@ func build_environment() -> void:
 	# IBL: drive ambient and reflections from the procedural night sky so metallic
 	# surfaces (posts, poles) catch the sky colour instead of a flat grey fill.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_color = Color(0.45, 0.55, 0.78)
-	env.ambient_light_energy = 0.5
+	# Near-neutral ambient: the old blue fill pushed the whole pitch toward cyan.
+	env.ambient_light_color = Color(0.62, 0.66, 0.72)
+	env.ambient_light_energy = AMBIENT_ENERGY_CLEAR
 	# ACES HDR tonemapping: cinematic highlight roll-off so the bright floodlights
 	# and neon signs compress gracefully instead of blowing out.
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
@@ -101,14 +114,15 @@ func build_environment() -> void:
 	env.ssil_radius = 6.0
 	env.ssil_intensity = 1.4
 	# Volumetric fog: faint stadium haze so the floodlight cones become visible light
-	# shafts and the far end of the pitch falls off with atmospheric depth.
+	# shafts and the far end of the pitch falls off with atmospheric depth. Kept very
+	# thin — denser values wash the far pitch into a milky cyan haze.
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.012
-	env.volumetric_fog_albedo = Color(0.85, 0.90, 1.0)
+	env.volumetric_fog_density = FOG_DENSITY_CLEAR
+	env.volumetric_fog_albedo = Color(0.90, 0.90, 0.92)
 	env.volumetric_fog_emission = Color(0.0, 0.0, 0.0)
 	env.volumetric_fog_emission_energy = 0.0
 	env.volumetric_fog_gi_inject = 1.0
-	env.volumetric_fog_ambient_inject = 0.4
+	env.volumetric_fog_ambient_inject = 0.15
 	env.volumetric_fog_length = 96.0
 	env.volumetric_fog_detail_spread = 2.0
 	world.environment = env
@@ -138,8 +152,8 @@ func build_lighting() -> void:
 		vp.positional_shadow_atlas_quad_1 = Viewport.SHADOW_ATLAS_QUADRANT_SUBDIV_4
 	var moon := DirectionalLight3D.new()
 	moon.name = "MoonLight"
-	moon.light_color = Color(0.60, 0.68, 0.88)
-	moon.light_energy = 0.9
+	moon.light_color = Color(0.72, 0.76, 0.86)
+	moon.light_energy = 0.7
 	moon.light_specular = 0.5
 	moon.light_angular_distance = 0.8
 	# Moon is fill light only — its single hard CSM shadow was the lone visible one
@@ -231,6 +245,8 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	spot.spot_angle = 50.0
 	spot.spot_attenuation = 1.4
 	spot.light_size = 0.9        # tighter source → crisper, readable shadow edges
+	# Damp how much the beam feeds the volumetric fog: subtle shaft, not a white blob.
+	spot.light_volumetric_fog_energy = 0.35
 	spot.shadow_enabled = true
 	spot.shadow_blur = 0.6
 	spot.shadow_bias = 0.03
@@ -347,6 +363,11 @@ func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
 	var panel := mf.make_mesh("Panel", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
 	panel.mesh.size = Vector3(3.55, 0.78, 0.05)
 	board.add_child(panel)
+	# Matching emissive panel on the back face so the boards nearest the camera
+	# glow too instead of reading as unlit black slabs.
+	var back_panel := mf.make_mesh("PanelBack", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, -0.10))
+	back_panel.mesh.size = Vector3(3.55, 0.78, 0.05)
+	board.add_child(back_panel)
 	var label := Label3D.new()
 	label.name = "AdText"
 	label.text = text
