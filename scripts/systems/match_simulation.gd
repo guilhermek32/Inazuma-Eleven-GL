@@ -48,6 +48,13 @@ var stats: Array[Dictionary] = [{}, {}]
 var offside_flags: Array[PlayerState] = []
 var offside_team := -1
 
+# Restart shield: after a restart is awarded the taker cannot be dispossessed
+# until they play the ball (or dribble off the spot / the grace time runs out),
+# so opponents can't just take the ball the instant the freeze ends.
+var restart_shield := false
+var restart_spot := Vector2.ZERO
+var restart_shield_timer := 0.0
+
 # How much nearer (normalized field units) a rival must be than the current switch
 # candidate before the "next player" ring moves to them. Hysteresis stops the ring
 # flickering between two near-equidistant players.
@@ -79,6 +86,7 @@ func reset_stats() -> void:
 ## team's update. Returns the scoring side (-1 left, +1 right, 0 none).
 func step(delta: float) -> int:
 	_update_restart(delta)
+	_update_restart_shield(delta)
 	if ball.owner_team >= 0:
 		stats[ball.owner_team].possession += delta
 	var scorer := _update_ball(delta)
@@ -147,6 +155,7 @@ func reset_game(kickoff_side: int) -> void:
 	ball.special_color = Color(1.0, 1.0, 1.0)
 	restart_type = Restart.KICKOFF
 	_clear_offside_flags()
+	restart_shield = false
 	field_reset.emit()
 	_clear_owner()
 	for ts in teams:
@@ -174,6 +183,8 @@ func _reset_players(players: Array[PlayerState]) -> void:
 		p.kick_power = 0.0
 		p.hold_timer = 0.0
 		p.is_moving = false
+		p.vel_x = 0.0
+		p.vel_y = 0.0
 		p.tackle_timer = 0.0
 		p.stamina = 1.0
 		p.gk_shot_active = false
@@ -212,11 +223,27 @@ func _update_restart(delta: float) -> void:
 			var spot_x := target_goal_x + (GameConfig.PENALTY_SPOT_DIST if target_goal_x < 0.0 else -GameConfig.PENALTY_SPOT_DIST)
 			kick_from_player(owner, Vector2(spot_x, 0.0), 0.55, false, GameConfig.CLEARANCE_LOFT)
 
+## The shield ends when the taker plays the ball (kick_from_player), dribbles
+## away from the spot, or the post-freeze grace period runs out.
+func _update_restart_shield(delta: float) -> void:
+	if not restart_shield or restart_timer > 0.0:
+		return
+	restart_shield_timer -= delta
+	var off_spot := Vector2(ball.x - restart_spot.x, ball.y - restart_spot.y).length() > 0.12
+	if restart_shield_timer <= 0.0 or off_spot:
+		restart_shield = false
+
 func _update_ball(delta: float) -> int:
 	var owner := owner_player()
 	if owner != null:
-		ball.x = owner.x + owner.facing_x * 0.035
-		ball.y = owner.y + owner.facing_y * 0.035
+		# Knock-ahead dribble: the ball chases a lead point pushed farther ahead
+		# the faster the carrier runs, with smoothing so it lags and swings around
+		# on sharp turns instead of being welded to the boots.
+		var carrier_speed := Vector2(owner.vel_x, owner.vel_y).length()
+		var lead := 0.035 + carrier_speed * GameConfig.DRIBBLE_LEAD
+		var chase := 1.0 - exp(-GameConfig.DRIBBLE_SMOOTH * delta)
+		ball.x = lerpf(ball.x, owner.x + owner.facing_x * lead, chase)
+		ball.y = lerpf(ball.y, owner.y + owner.facing_y * lead, chase)
 		ball.vx = 0.0
 		ball.vy = 0.0
 		ball.h = 0.0
@@ -300,15 +327,65 @@ func _award_restart(type: int, team_idx: int, spot: Vector2) -> void:
 	taker.x = spot.x
 	taker.y = spot.y
 	taker.stun_timer = 0.0
+	taker.vel_x = 0.0
+	taker.vel_y = 0.0
 	clamp_player(taker)
 	_set_owner(team_idx, taker_idx)
 	# Face into the pitch so the glued ball sits in bounds.
 	var inward := Vector2(-spot.x, -spot.y).normalized()
 	taker.facing_x = inward.x
 	taker.facing_y = inward.y
+	_clear_restart_space(team_idx, spot)
+	_pull_support_teammates(team_idx, taker_idx, spot)
+	restart_shield = true
+	restart_spot = spot
+	restart_shield_timer = GameConfig.RESTART_SHIELD_TIME
 	restart_type = type
 	restart_timer = GameConfig.RESTART_FREEZE
 	restart_awarded.emit(type, team_idx)
+
+## Opponents inside the clearance ring are pushed radially out to its edge, like
+## a referee walking the wall back.
+func _clear_restart_space(team_idx: int, spot: Vector2) -> void:
+	for opp in teams[1 - team_idx].players:
+		var off := Vector2(opp.x - spot.x, opp.y - spot.y)
+		if off.length() >= GameConfig.RESTART_CLEAR_DIST:
+			continue
+		if off.length() < 0.001:
+			off = Vector2(-spot.x, -spot.y).normalized()   # degenerate: push infield
+			if off.length() < 0.001:
+				off = Vector2(1.0, 0.0)
+		var pushed := spot + off.normalized() * GameConfig.RESTART_CLEAR_DIST
+		opp.x = pushed.x
+		opp.y = pushed.y
+		opp.vel_x = 0.0
+		opp.vel_y = 0.0
+		clamp_player(opp)
+
+## The taker's two nearest outfield teammates step in as short passing options,
+## fanned infield from the spot.
+func _pull_support_teammates(team_idx: int, taker_idx: int, spot: Vector2) -> void:
+	var players := teams[team_idx].players
+	var candidates: Array[int] = []
+	for i in players.size():
+		if i == taker_idx or players[i].role == GameConfig.PlayerRole.GOALKEEPER:
+			continue
+		candidates.append(i)
+	candidates.sort_custom(func(a: int, b: int) -> bool:
+		return Vector2(players[a].x - spot.x, players[a].y - spot.y).length_squared() \
+				< Vector2(players[b].x - spot.x, players[b].y - spot.y).length_squared())
+	var inward := Vector2(-spot.x, -spot.y).normalized()
+	if inward.length() < 0.001:
+		inward = Vector2(1.0, 0.0)
+	var angles := [0.6, -0.6]
+	for n in mini(2, candidates.size()):
+		var mate := players[candidates[n]]
+		var pos := spot + inward.rotated(angles[n]) * GameConfig.RESTART_SUPPORT_DIST
+		mate.x = pos.x
+		mate.y = pos.y
+		mate.vel_x = 0.0
+		mate.vel_y = 0.0
+		clamp_player(mate)
 
 func _nearest_player_to(players: Array[PlayerState], spot: Vector2) -> int:
 	var best := 0
@@ -371,12 +448,18 @@ func _handle_user_selection(ts: TeamState) -> void:
 	# the currently selected one. Hysteresis keeps the current candidate unless a rival
 	# is clearly nearer, so two near-equidistant players can't flip the ring (and bounce
 	# control) every frame.
+	# Candidates are ranked against where the ball is *going*, not where it is,
+	# so on defense the ring lands on the best interceptor of a rolling ball.
+	# A stationary ball degrades this to plain nearest-player.
+	var predict := Vector2(
+		clampf(ball.x + ball.vx * GameConfig.SWITCH_PREDICT_TIME, -GameConfig.FIELD_BOUNDARY_X, GameConfig.FIELD_BOUNDARY_X),
+		clampf(ball.y + ball.vy * GameConfig.SWITCH_PREDICT_TIME, -GameConfig.FIELD_BOUNDARY_Y, GameConfig.FIELD_BOUNDARY_Y))
 	var players := ts.players
 	var cur := ts.selected_index
 	var incumbent := ts.switch_candidate
 	var incumbent_dist := INF
 	if incumbent >= 0 and incumbent != cur and players[incumbent].role != GameConfig.PlayerRole.GOALKEEPER:
-		incumbent_dist = Vector2(players[incumbent].x - ball.x, players[incumbent].y - ball.y).length()
+		incumbent_dist = Vector2(players[incumbent].x - predict.x, players[incumbent].y - predict.y).length()
 	else:
 		incumbent = -1
 	var best := -1
@@ -384,7 +467,7 @@ func _handle_user_selection(ts: TeamState) -> void:
 	for i in players.size():
 		if i == cur or players[i].role == GameConfig.PlayerRole.GOALKEEPER:
 			continue
-		var d := Vector2(players[i].x - ball.x, players[i].y - ball.y).length()
+		var d := Vector2(players[i].x - predict.x, players[i].y - predict.y).length()
 		if d < best_dist:
 			best_dist = d
 			best = i
@@ -435,13 +518,7 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 	if snap.tackle_pressed and not is_carrier and p.stun_timer <= 0.0 and p.tackle_timer <= 0.0:
 		p.tackle_timer = GameConfig.TACKLE_WINDOW
 		p.play_action("tackle", 0.4)
-	if snap.axis != Vector2.ZERO:
-		p.x += snap.axis.x * p.speed * speed_mult * delta
-		p.y += snap.axis.y * p.speed * speed_mult * delta
-		p.facing_x = snap.axis.x if snap.axis.x != 0.0 else p.facing_x
-		p.facing_y = snap.axis.y if snap.axis.y != 0.0 else p.facing_y
-		p.is_moving = true
-		clamp_player(p)
+	apply_movement(p, snap.axis * p.speed * speed_mult, delta)
 	if ball.owner_team == team_idx and ball.owner_index == player_idx:
 		ball.charging_power = p.kick_power
 		if snap.pass_pressed:
@@ -452,7 +529,7 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 				# press is never silently swallowed.
 				pass_target = _nearest_teammate(p, players)
 			if pass_target != null:
-				kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
+				kick_from_player(p, lead_pass_point(Vector2(p.x, p.y), pass_target), GameConfig.PASS_POWER, false, -1.0, true)
 			else:
 				kick_from_player(p, Vector2(p.x + p.facing_x, p.y + p.facing_y), GameConfig.PASS_POWER, false, -1.0, true)
 		elif snap.shoot_held:
@@ -470,12 +547,24 @@ func _aim_target(snap: InputSnapshot, p: PlayerState) -> Vector2:
 	var dir := snap.aim_vec if snap.aim_vec != Vector2.ZERO else Vector2(p.facing_x, p.facing_y)
 	return Vector2(p.x, p.y) + dir
 
+## Where to aim a pass so a moving receiver runs onto it: the target is led by
+## the mate's velocity over the estimated flight time, clamped inside the field.
+func lead_pass_point(from: Vector2, mate: PlayerState) -> Vector2:
+	var mate_pos := Vector2(mate.x, mate.y)
+	var pass_ball_speed := GameConfig.KICK_BASE_POWER + GameConfig.PASS_POWER * GameConfig.KICK_POWER_SCALE
+	var t := clampf(from.distance_to(mate_pos) / pass_ball_speed, 0.0, GameConfig.PASS_LEAD_MAX)
+	var target := mate_pos + Vector2(mate.vel_x, mate.vel_y) * t
+	target.x = clampf(target.x, -GameConfig.FIELD_BOUNDARY_X + 0.03, GameConfig.FIELD_BOUNDARY_X - 0.03)
+	target.y = clampf(target.y, -GameConfig.FIELD_BOUNDARY_Y + 0.03, GameConfig.FIELD_BOUNDARY_Y - 0.03)
+	return target
+
 ## `loft` is the vertical launch speed in world units; < 0 picks a default
 ## (shots arc with charge, passes stay on the ground). `is_pass` marks kicks
 ## aimed at a teammate (they arm the offside flags); `is_shot` marks goal
 ## attempts for the match statistics.
 func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: bool, loft := -1.0, is_pass := false, is_shot := false) -> void:
 	_clear_offside_flags()
+	restart_shield = false
 	var dir := target - Vector2(p.x, p.y)
 	if dir.length() <= 0.001:
 		dir = Vector2(p.facing_x, p.facing_y)
@@ -613,7 +702,10 @@ func _resolve_ball_capture() -> void:
 			if ball.h > reach:
 				continue
 			# Stealing an owned ball takes a live tackle attempt (keepers may
-			# always claim); loose balls are still collected on contact.
+			# always claim); loose balls are still collected on contact. While
+			# the restart shield is up the taker cannot be dispossessed at all.
+			if owner != null and restart_shield:
+				continue
 			if owner != null and p.tackle_timer <= 0.0 and p.role != GameConfig.PlayerRole.GOALKEEPER:
 				continue
 			var d := Vector2(p.x - ball.x, p.y - ball.y).length()
@@ -657,9 +749,28 @@ func _resolve_ball_capture() -> void:
 func move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
 	if diff.length() > 0.005:
-		var dir := diff.normalized()
-		p.x += dir.x * current_speed * delta
-		p.y += dir.y * current_speed * delta
+		apply_movement(p, diff.normalized() * current_speed, delta)
+	else:
+		apply_movement(p, Vector2.ZERO, delta)
+
+## Accelerates the player's actual velocity toward `desired` and integrates the
+## position. Every mover (user input, AI move_towards, AI dribble) routes through
+## here so players carry momentum instead of snapping to full speed; facing and
+## is_moving derive from the real velocity.
+func apply_movement(p: PlayerState, desired: Vector2, delta: float) -> void:
+	var vel := Vector2(p.vel_x, p.vel_y)
+	var accel := GameConfig.PLAYER_ACCEL if desired.length_squared() > vel.length_squared() else GameConfig.PLAYER_DECEL
+	# Keepers stay twitchy: their line shuffle and dive burst need near-instant
+	# direction flips or saves arrive late.
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
+		accel *= 2.5
+	vel = vel.move_toward(desired, accel * delta)
+	p.vel_x = vel.x
+	p.vel_y = vel.y
+	if vel.length() > 0.01:
+		p.x += vel.x * delta
+		p.y += vel.y * delta
+		var dir := vel.normalized()
 		p.facing_x = dir.x
 		p.facing_y = dir.y
 		p.is_moving = true

@@ -28,6 +28,13 @@ func _initialize() -> void:
 	_test_stats_tracking()
 	_test_gk_dive_triggers()
 	_test_rain_friction()
+	_test_restart_clears_space()
+	_test_restart_shield_blocks_steal()
+	_test_restart_shield_expires()
+	_test_movement_momentum()
+	_test_knock_ahead_dribble()
+	_test_led_pass()
+	_test_switch_targets_predicted_ball()
 	if failures == 0:
 		print("ALL TESTS PASSED")
 	else:
@@ -317,6 +324,144 @@ func _test_rain_friction() -> void:
 		dist[fric] = sim.ball.x
 	_check(dist[GameConfig.RAIN_BALL_FRICTION] > dist[GameConfig.BALL_FRICTION],
 			"the wet ball skids farther than the dry ball")
+	sim.free()
+
+func _test_restart_clears_space() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	sim._clear_owner()
+	# Park a blue defender right on the future throw-in spot, then boot the ball
+	# out off blue: the restart must push him to the clearance ring and pull two
+	# red teammates in close as passing options.
+	sim.teams[1].players[3].x = 0.0
+	sim.teams[1].players[3].y = 0.70
+	sim.ball.last_touch_team = 1
+	sim.ball.x = 0.0
+	sim.ball.y = 0.70
+	sim.ball.vy = 2.0
+	sim.step(0.05)
+	var spot := Vector2(sim.ball.x, sim.ball.y)
+	var clear := true
+	for opp in sim.teams[1].players:
+		if Vector2(opp.x - spot.x, opp.y - spot.y).length() < GameConfig.RESTART_CLEAR_DIST - 0.01:
+			clear = false
+	_check(clear, "opponents are pushed out of the restart clearance ring")
+	var close_mates := 0
+	for i in sim.teams[0].players.size():
+		if i == sim.ball.owner_index:
+			continue
+		if Vector2(sim.teams[0].players[i].x - spot.x, sim.teams[0].players[i].y - spot.y).length() < GameConfig.RESTART_SUPPORT_DIST + 0.05:
+			close_mates += 1
+	_check(close_mates >= 2, "two teammates step close as pass options")
+	sim.free()
+
+func _test_restart_shield_blocks_steal() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	sim._clear_owner()
+	sim.ball.last_touch_team = 1
+	sim.ball.x = 0.0
+	sim.ball.y = 0.70
+	sim.ball.vy = 2.0
+	sim.step(0.05)   # throw-in awarded to red, shield up
+	sim.restart_timer = 0.0
+	var taker: PlayerState = sim.owner_player()
+	var thief: PlayerState = sim.teams[1].players[5]
+	thief.x = taker.x + 0.01
+	thief.y = taker.y
+	thief.stun_timer = 0.0
+	thief.tackle_timer = GameConfig.TACKLE_WINDOW
+	sim.ball.x = taker.x
+	sim.ball.y = taker.y
+	sim._resolve_ball_capture()
+	_check(sim.ball.owner_team == 0, "the restart shield blocks steals before the ball is played")
+	# Once the taker plays the ball the shield drops.
+	sim.kick_from_player(taker, Vector2(0.0, 0.0), GameConfig.PASS_POWER, false, -1.0, true)
+	_check(not sim.restart_shield, "playing the ball ends the restart shield")
+	sim.free()
+
+func _test_restart_shield_expires() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	sim._clear_owner()
+	sim.ball.last_touch_team = 1
+	sim.ball.x = 0.0
+	sim.ball.y = 0.70
+	sim.ball.vy = 2.0
+	sim.step(0.05)
+	sim.restart_timer = 0.0
+	for i in 60:
+		sim.step(GameConfig.RESTART_SHIELD_TIME / 30.0)
+		if not sim.restart_shield:
+			break
+	_check(not sim.restart_shield, "the restart shield times out so play cannot stall")
+	sim.free()
+
+func _test_movement_momentum() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	var p: PlayerState = sim.teams[0].players[9]
+	sim.apply_movement(p, Vector2(p.speed, 0.0), 0.05)
+	var v1 := Vector2(p.vel_x, p.vel_y).length()
+	_check(v1 > 0.0 and v1 < p.speed * 0.5, "one tick of acceleration is well below top speed")
+	for i in 30:
+		sim.apply_movement(p, Vector2(p.speed, 0.0), 0.05)
+	_check(absf(Vector2(p.vel_x, p.vel_y).length() - p.speed) < 0.01, "velocity converges on the desired speed")
+	sim.free()
+
+func _test_knock_ahead_dribble() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	var owner: PlayerState = sim.owner_player()
+	owner.facing_x = 1.0
+	owner.facing_y = 0.0
+	owner.vel_x = owner.speed * GameConfig.SPRINT_MULT
+	for i in 60:
+		sim._update_ball(1.0 / 60.0)
+	_check(sim.ball.x - owner.x > 0.05, "a sprinting carrier pushes the ball ahead of the glue offset")
+	owner.vel_x = 0.0
+	for i in 60:
+		sim._update_ball(1.0 / 60.0)
+	_check(absf(sim.ball.x - owner.x - 0.035) < 0.005, "a standing carrier keeps the ball at the base offset")
+	sim.free()
+
+func _test_led_pass() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	var mate: PlayerState = sim.teams[0].players[9]
+	mate.x = 0.3
+	mate.y = 0.0
+	mate.vel_x = 0.2
+	var led := sim.lead_pass_point(Vector2.ZERO, mate)
+	_check(led.x > mate.x + 0.02, "a pass leads a moving receiver in their running direction")
+	mate.vel_x = 0.0
+	var still := sim.lead_pass_point(Vector2.ZERO, mate)
+	_check(still.is_equal_approx(Vector2(mate.x, mate.y)), "a stationary receiver is aimed at directly")
+	sim.free()
+
+func _test_switch_targets_predicted_ball() -> void:
+	var sim := _make_sim()
+	sim.reset_game(1)
+	sim.restart_timer = 0.0
+	sim._clear_owner()
+	# Ball at the centre rolling hard toward a red player parked at +0.4; another
+	# red stands nearer the ball's current spot. The candidate ring must pick the
+	# interceptor at the predicted point, not the player nearest the ball now.
+	sim.ball.x = 0.0
+	sim.ball.y = 0.0
+	sim.ball.vx = 0.8
+	sim.ball.vy = 0.0
+	sim.teams[0].players[9].x = 0.4
+	sim.teams[0].players[9].y = 0.0
+	sim.teams[0].players[5].x = 0.05
+	sim.teams[0].players[5].y = 0.15
+	sim.teams[0].selected_index = 1
+	sim.teams[0].switch_candidate = -1
+	sim._handle_user_selection(sim.teams[0])
+	_check(sim.teams[0].switch_candidate == 9, "switch candidate is the interceptor of the rolling ball")
 	sim.free()
 
 func _test_switch_ends() -> void:

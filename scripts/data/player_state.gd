@@ -19,6 +19,10 @@ var stun_timer := 0.0
 var kick_power := 0.0
 var hold_timer := 0.0
 var is_moving := false
+# Actual movement velocity (field units/s): all movement paths accelerate toward
+# their desired velocity instead of teleport-stepping, giving players weight.
+var vel_x := 0.0
+var vel_y := 0.0
 # Active tackle attempt: while > 0 this player can steal on contact; if it
 # expires without winning the ball the lunge whiffs and self-stuns.
 var tackle_timer := 0.0

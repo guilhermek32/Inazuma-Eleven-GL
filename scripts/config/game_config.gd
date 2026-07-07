@@ -66,6 +66,15 @@ const PLAYER_SPEED := 0.2            # fallback outfield speed
 const GK_SPEED := 0.32               # goalkeeper shuffle speed
 const ROLE_SPEED := {PlayerRole.GOALKEEPER: GK_SPEED, PlayerRole.DEFENDER: 0.19, PlayerRole.MIDFIELDER: 0.20, PlayerRole.ATTACKER: 0.215}
 const SPRINT_MULT := 1.4             # speed multiplier while sprinting
+# Movement momentum: players accelerate/brake instead of snapping to full speed.
+const PLAYER_ACCEL := 1.2            # field units/s^2 toward the desired velocity
+const PLAYER_DECEL := 1.8            # ...and a bit sharper when slowing/turning
+# Knock-ahead dribble: the ball is pushed a step ahead of a running carrier and
+# chases the lead point with smoothing, so it lags/swings on sharp turns.
+const DRIBBLE_LEAD := 0.16           # extra ball lead per unit of carrier speed
+const DRIBBLE_SMOOTH := 9.0          # per-second chase rate of the ball to its lead point
+const PASS_LEAD_MAX := 0.35          # max seconds a pass leads a moving receiver
+const SWITCH_PREDICT_TIME := 0.5     # switch candidate targets the ball this far ahead
 const SPRINT_DRAIN := 0.35           # stamina drained per second sprinting
 const SPRINT_REGEN := 0.25           # stamina regained per second otherwise
 
@@ -137,6 +146,9 @@ const RAIN_PARTICLES := 2500
 
 # Restart play (throw-ins / corners / goal kicks)
 const RESTART_FREEZE := 1.2          # seconds play holds while the taker sets up
+const RESTART_CLEAR_DIST := 0.16     # opponents are pushed at least this far from the spot
+const RESTART_SUPPORT_DIST := 0.14   # two teammates are pulled this close as pass options
+const RESTART_SHIELD_TIME := 2.5     # post-freeze grace during which the taker can't be robbed
 const CORNER_SPOT_X := 0.90          # normalized corner-arc restart spot
 const CORNER_SPOT_Y := 0.70
 const GOAL_KICK_X := 0.84            # normalized |x| where the keeper places a goal kick

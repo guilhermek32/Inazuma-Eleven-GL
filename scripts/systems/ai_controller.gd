@@ -24,7 +24,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 			if p.hold_timer > 1.0:
 				var clear_target := best_pass_target(p, team, opponents, -float(p.side) * GameConfig.FIELD_BOUNDARY_X)
 				if clear_target != null:
-					sim.kick_from_player(p, Vector2(clear_target.x, clear_target.y), 0.45, false, -1.0, true)
+					sim.kick_from_player(p, sim.lead_pass_point(Vector2(p.x, p.y), clear_target), 0.45, false, -1.0, true)
 				else:
 					# Long clearance: hoof it high upfield.
 					sim.kick_from_player(p, Vector2(-float(p.side) * 0.3, randf_range(-0.5, 0.5)), 0.7, false, GameConfig.CLEARANCE_LOFT)
@@ -78,6 +78,13 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 			target = Vector2(p.start_x, p.start_y)
 		elif _is_presser(team, player_idx, 1):
 			target = Vector2(sim.ball.x, sim.ball.y)
+			# A restart in progress: hold off at the clearance ring instead of
+			# crowding the taker (the shield blocks steals anyway).
+			if sim.restart_shield:
+				var away := Vector2(p.x, p.y) - target
+				if away.length() < 0.001:
+					away = Vector2(float(p.side), 0.0)
+				target += away.normalized() * GameConfig.RESTART_CLEAR_DIST
 			# The presser sprints on the same stamina rules as a human sprinter…
 			if p.stamina > 0.0:
 				sprinting = true
@@ -85,7 +92,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 				p.stamina = maxf(0.0, p.stamina - GameConfig.SPRINT_DRAIN * delta)
 			# …and commits to a tackle lunge when it closes on the carrier.
 			var decision_scale: float = sim.settings.ai_decision_mult if is_opponent else 1.0
-			if ball_owner != null and ball_owner.side != p.side and p.tackle_timer <= 0.0 and p.stun_timer <= 0.0:
+			if ball_owner != null and ball_owner.side != p.side and p.tackle_timer <= 0.0 and p.stun_timer <= 0.0 and not sim.restart_shield:
 				var carrier_dist := Vector2(ball_owner.x - p.x, ball_owner.y - p.y).length()
 				if carrier_dist < GameConfig.AI_TACKLE_RANGE and randf() < GameConfig.AI_TACKLE_RATE * decision_scale * delta:
 					p.tackle_timer = GameConfig.TACKLE_WINDOW
@@ -127,7 +134,7 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 	if under_pressure and randf() < GameConfig.AI_PRESSURE_PASS_RATE * decision_scale * delta:
 		var pass_target := best_pass_target(p, team, opponents, target_goal_x)
 		if pass_target != null:
-			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
+			sim.kick_from_player(p, sim.lead_pass_point(Vector2(p.x, p.y), pass_target), GameConfig.PASS_POWER, false, -1.0, true)
 			return
 	# Shoot when close enough and facing the goal.
 	var facing_goal := Vector2(target_goal_x - p.x, -p.y).normalized()
@@ -142,7 +149,7 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 	if randf() < GameConfig.AI_PASS_RATE * decision_scale * delta:
 		var pass_target := best_pass_target(p, team, opponents, target_goal_x)
 		if pass_target != null:
-			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
+			sim.kick_from_player(p, sim.lead_pass_point(Vector2(p.x, p.y), pass_target), GameConfig.PASS_POWER, false, -1.0, true)
 			return
 	# Dribble toward goal, steering slightly away from the nearest opponent.
 	var dribble := Vector2(target_goal_x - p.x, -p.y * 0.25)
@@ -150,13 +157,7 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 		var evade := Vector2(p.x - nearest_opp.x, p.y - nearest_opp.y).normalized()
 		dribble += evade * 0.5
 	if dribble.length() > 0.001:
-		dribble = dribble.normalized()
-		p.x += dribble.x * p.speed * 0.8 * delta
-		p.y += dribble.y * p.speed * 0.8 * delta
-		p.facing_x = dribble.x
-		p.facing_y = dribble.y
-		p.is_moving = true
-		sim.clamp_player(p)
+		sim.apply_movement(p, dribble.normalized() * p.speed * 0.8, delta)
 
 func best_pass_target(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], target_goal_x: float) -> PlayerState:
 	var best: PlayerState = null
