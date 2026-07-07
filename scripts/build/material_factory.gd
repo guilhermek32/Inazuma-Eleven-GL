@@ -6,6 +6,50 @@ extends RefCounted
 ## hold a reference to it as `mf`.
 
 var materials := {}
+# Original grass values, stashed the first time set_pitch_wet() darkens them.
+var _dry_pitch := {}
+
+# Goal-net ripple: vertices are displaced along their normal by a radial sine
+# wave centred on the (world-space) ball impact point, decaying in both distance
+# and time. ripple_strength 0 = completely still.
+const NET_SHADER_CODE := "
+shader_type spatial;
+render_mode cull_disabled;
+uniform sampler2D albedo_tex : source_color;
+uniform vec3 impact_world = vec3(0.0);
+uniform float ripple_time = 10.0;
+uniform float ripple_strength = 0.0;
+void vertex() {
+	vec3 wv = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	float d = distance(wv, impact_world);
+	float amp = ripple_strength * exp(-d * 1.6) * exp(-ripple_time * 2.6);
+	VERTEX += NORMAL * amp * sin(d * 9.0 - ripple_time * 22.0);
+}
+void fragment() {
+	vec4 c = texture(albedo_tex, UV);
+	ALBEDO = c.rgb;
+	ALPHA = c.a;
+	ROUGHNESS = 0.7;
+}
+"
+
+## Fresh net material instance (one per goal, so only the goal that concedes ripples).
+func make_net_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = NET_SHADER_CODE
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("albedo_tex", _net_texture())
+	return mat
+
+## Rain visual: darkens and polishes the turf so the floodlights leave a wet sheen.
+func set_pitch_wet(wet: bool) -> void:
+	for key in ["grass", "grass_dark"]:
+		var m: StandardMaterial3D = materials[key]
+		if not _dry_pitch.has(key):
+			_dry_pitch[key] = {"rough": m.roughness, "col": m.albedo_color}
+		m.roughness = 0.40 if wet else _dry_pitch[key].rough
+		m.albedo_color = (_dry_pitch[key].col as Color) * Color(0.78, 0.78, 0.85) if wet else _dry_pitch[key].col
 
 func build_materials() -> void:
 	# Pre-bake procedural normal maps: tangent-space RGB from height-field gradients.

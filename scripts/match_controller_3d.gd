@@ -117,6 +117,8 @@ func _ready() -> void:
 	sim.special_fired.connect(_begin_special_shot)
 	sim.field_reset.connect(view.reset_trail)
 	sim.restart_awarded.connect(_on_restart_awarded)
+	sim.foul_committed.connect(_on_foul)
+	sim.offside_called.connect(_on_offside)
 	settings.audio = audio
 	settings.load_settings()
 	menu = MenuManager.new()
@@ -129,6 +131,10 @@ func _ready() -> void:
 	setup.controller = self
 	setup.sim = sim
 	setup.build()
+	view.net_materials = pitch_builder.net_materials
+	sim.goal_scored.connect(_on_goal_net_ripple)
+	stadium_builder.build_weather()
+	_apply_weather()
 	sim.reset_game(1)
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
@@ -202,6 +208,22 @@ func _on_restart_awarded(type: int, team: int) -> void:
 	hud.show_banner(labels[type], sim.teams[team].kit.shirt, 1.0, false)
 	audio.play_whistle()
 
+# Fouls/offside show their own banner; the FREE_KICK restart that follows is
+# deliberately absent from _on_restart_awarded's labels so they don't double-fire
+# (the restart still shows as "Free kick" in the HUD timer text).
+func _on_goal_net_ripple(_scorer: int) -> void:
+	# pending_kickoff_side is the side whose goal was just hit.
+	var impact := GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), sim.ball.h + GameConfig.BALL_RADIUS)
+	view.trigger_net_ripple(sim.pending_kickoff_side, impact)
+
+func _on_foul(_team: int, _spot: Vector2) -> void:
+	hud.show_banner("FOUL!", Color(1.0, 0.85, 0.3), 0.9, false)
+	audio.play_whistle()
+
+func _on_offside(_team: int) -> void:
+	hud.show_banner("OFFSIDE", Color(1.0, 0.55, 0.2), 0.9, false)
+	audio.play_whistle()
+
 func _begin_goal_celebration(scorer: int) -> void:
 	# Drop any active slow-mo, then freeze the field for the celebration. The confetti
 	# and whistle already fired inside sim.step(); the reset waits for the freeze to end.
@@ -258,6 +280,9 @@ func _start_match() -> void:
 	# Rebuild both teams from the formation/kit picked on the Choose Sides screen.
 	sim.create_teams()
 	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
+	hud.reset()
+	sim.reset_stats()
+	_apply_weather()
 	sim.set_default_ends()
 	sim.reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
@@ -289,7 +314,16 @@ func _end_match() -> void:
 	elif sim.score_right > sim.score_left:
 		result = "TIME B WINS"
 	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [sim.score_left, sim.score_right, result])
+	menu.set_fulltime_stats(sim.stats, sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
 	_set_game_state(GameConfig.GameState.FULLTIME)
+
+## Applies the selected weather: rain particles + wet pitch + slicker ball.
+## Called on startup, at match start and when the setting changes.
+func _apply_weather() -> void:
+	var raining: bool = settings.weather == 1
+	stadium_builder.set_rain_active(raining)
+	material_factory.set_pitch_wet(raining)
+	sim.ball.friction = GameConfig.RAIN_BALL_FRICTION if raining else GameConfig.BALL_FRICTION
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 	if game_state == GameConfig.GameState.MATCH_SETUP:

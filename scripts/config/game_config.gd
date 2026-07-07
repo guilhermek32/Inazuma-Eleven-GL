@@ -119,6 +119,22 @@ const CAPTURE_MAX_HEIGHT := 1.1      # outfielders can't control a ball above th
 const GK_REACH_HEIGHT := 1.8         # the keeper can reach up to the bar
 const HARD_SHOT_CURVE := 0.3         # max random Magnus curve (rad/s) on ordinary hard shots
 
+# Fouls & offside (each can be disabled in Settings for arcade play)
+const FOUL_BEHIND_DOT := -0.35       # tackle counts as from-behind when the tackler
+                                     # sits this far behind the carrier's facing
+const FREE_KICK_MIN_GOAL_DIST := 0.20  # free-kick spots are pushed out of the goalmouth
+const OFFSIDE_EPS := 0.005           # tolerance on the second-to-last-defender line
+
+# Goalkeeper dive (visual lunge toward the predicted intercept point)
+const GK_DIVE_MIN_OFFSET := 0.04     # intercept must be this far from the keeper
+const GK_DIVE_TIME_TO_LINE := 0.45   # ...and arriving within this many seconds
+const GK_DIVE_DURATION := 0.5
+const GK_DIVE_SPEED_MULT := 1.8      # burst toward the ball while diving
+
+# Rain weather: slicker turf so the ball skids farther
+const RAIN_BALL_FRICTION := 0.986
+const RAIN_PARTICLES := 2500
+
 # Restart play (throw-ins / corners / goal kicks)
 const RESTART_FREEZE := 1.2          # seconds play holds while the taker sets up
 const CORNER_SPOT_X := 0.90          # normalized corner-arc restart spot

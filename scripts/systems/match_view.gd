@@ -17,6 +17,12 @@ var vfx_root: Node3D
 var camera_rig: Node3D
 var camera_3d: Camera3D
 
+# Goal side (-1/+1) -> that goal's net ShaderMaterial; assigned by the controller
+# from PitchBuilder. The ripple animates here so the sim stays presentation-free.
+var net_materials := {}
+var _ripple_side := 0
+var _ripple_t := 0.0
+
 var ball_trail: Array[MeshInstance3D] = []
 var ball_trail_points: Array[Vector3] = []
 var celebration_timer := 0.0
@@ -171,8 +177,30 @@ func update_visuals(delta: float) -> void:
 			_update_player_visual(players[i], i, sim.ball.owner_team == t and sim.ball.owner_index == i, delta)
 	_update_ball_visual(delta)
 	_update_camera(delta)
+	_update_net_ripple(delta)
 	if celebration_timer > 0.0:
 		celebration_timer = maxf(0.0, celebration_timer - delta)
+
+## Kicks off the net-ripple on the conceding goal's net at the ball's impact point.
+func trigger_net_ripple(goal_side: int, impact_world: Vector3) -> void:
+	if not net_materials.has(goal_side):
+		return
+	_ripple_side = goal_side
+	_ripple_t = 0.0
+	var mat: ShaderMaterial = net_materials[goal_side]
+	mat.set_shader_parameter("impact_world", impact_world)
+	mat.set_shader_parameter("ripple_strength", 0.35)
+	mat.set_shader_parameter("ripple_time", 0.0)
+
+func _update_net_ripple(delta: float) -> void:
+	if _ripple_side == 0:
+		return
+	_ripple_t += delta
+	var mat: ShaderMaterial = net_materials[_ripple_side]
+	mat.set_shader_parameter("ripple_time", _ripple_t)
+	if _ripple_t > 1.4:
+		mat.set_shader_parameter("ripple_strength", 0.0)
+		_ripple_side = 0
 
 func _update_player_visual(p: PlayerState, player_index: int, owns_ball: bool, delta: float) -> void:
 	if p.node == null:
@@ -207,6 +235,8 @@ func _update_glb_player_visual(p: PlayerState, player_index: int, owns_ball: boo
 	var face := _facing_vector(p)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
+		_update_gk_dive_pose(p)
 	if p.action_timer > 0.0:
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
@@ -224,6 +254,27 @@ func _update_glb_player_visual(p: PlayerState, player_index: int, owns_ball: boo
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
+
+# Keeper dive: while sim.gk_dive_timer runs, play a dive clip if the animation
+# library has one, otherwise procedurally roll the Model child toward the dive
+# side (the root's rotation.y is rewritten every frame, so tilt the child).
+func _update_gk_dive_pose(p: PlayerState) -> void:
+	var model := p.node.get_node_or_null("Model") as Node3D
+	if model == null:
+		return
+	if p.gk_dive_timer <= 0.0:
+		model.rotation.z = 0.0
+		return
+	# Same handedness logic as _gk_move_state: facing x movement cross product
+	# decides whether the dive is to the keeper's own left or right.
+	var facing := Vector2(sim.ball.x - p.x, sim.ball.y - p.y)
+	var cross := facing.x * float(p.gk_dive_dir)
+	var clip := "gk_dive_left" if cross > 0.0 else "gk_dive_right"
+	if p.animation_player != null and p.animation_player.has_animation(clip):
+		p.play_action(clip, GameConfig.GK_DIVE_DURATION)
+		return
+	var phase := 1.0 - p.gk_dive_timer / GameConfig.GK_DIVE_DURATION
+	model.rotation.z = sin(phase * PI) * deg_to_rad(65.0) * (1.0 if cross > 0.0 else -1.0)
 
 # Picks the forward-facing sideways shuffle clip for a moving keeper. The keeper always
 # faces the ball, so the shuffle is purely lateral: the sign of (facing × movement) tells

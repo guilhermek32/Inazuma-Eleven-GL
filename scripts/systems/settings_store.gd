@@ -14,6 +14,10 @@ var cam_dist_mult := 1.0
 var camera_distance := 1       # 0 Close, 1 Normal, 2 Far, 3 Very Far
 var cam_zoom_mult := 1.0       # derived from camera_distance in _apply_settings()
 var half_length := 120.0       # seconds per half
+# Realism rules: fouls default on, offside default off (arcade-friendly).
+var fouls_enabled := true
+var offside_enabled := false
+var weather := 0               # 0 Clear, 1 Rain
 var fullscreen := false
 var vol_master := 0.9
 var vol_music := 0.7
@@ -53,6 +57,9 @@ func load_settings() -> void:
 	if cfg.load(GameConfig.SETTINGS_PATH) == OK:
 		difficulty = cfg.get_value("game", "difficulty", difficulty)
 		half_length = cfg.get_value("game", "half_length", half_length)
+		fouls_enabled = cfg.get_value("game", "fouls_enabled", fouls_enabled)
+		offside_enabled = cfg.get_value("game", "offside_enabled", offside_enabled)
+		weather = cfg.get_value("game", "weather", weather)
 		fullscreen = cfg.get_value("video", "fullscreen", fullscreen)
 		camera_angle = cfg.get_value("video", "camera_angle", camera_angle)
 		camera_distance = cfg.get_value("video", "camera_distance", camera_distance)
@@ -65,6 +72,9 @@ func _save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("game", "difficulty", difficulty)
 	cfg.set_value("game", "half_length", half_length)
+	cfg.set_value("game", "fouls_enabled", fouls_enabled)
+	cfg.set_value("game", "offside_enabled", offside_enabled)
+	cfg.set_value("game", "weather", weather)
 	cfg.set_value("video", "fullscreen", fullscreen)
 	cfg.set_value("video", "camera_angle", camera_angle)
 	cfg.set_value("video", "camera_distance", camera_distance)

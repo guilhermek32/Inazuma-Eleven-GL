@@ -19,6 +19,44 @@ var stadium_root: Node3D
 var camera_rig: Node3D
 var camera_3d: Camera3D
 var voxel_gi: VoxelGI
+var rain: GPUParticles3D
+
+## One GPU particle emitter of falling streak quads over the pitch; built once,
+## toggled by set_rain_active() when the Weather setting changes.
+func build_weather() -> void:
+	rain = GPUParticles3D.new()
+	rain.name = "Rain"
+	rain.amount = GameConfig.RAIN_PARTICLES
+	rain.lifetime = 1.6
+	rain.emitting = false
+	rain.visible = false
+	rain.visibility_aabb = AABB(Vector3(-42.0, -26.0, -32.0), Vector3(84.0, 30.0, 64.0))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(40.0, 1.0, 30.0)
+	pm.direction = Vector3(0.0, -1.0, 0.0)
+	pm.spread = 2.0
+	pm.initial_velocity_min = 17.0
+	pm.initial_velocity_max = 23.0
+	pm.gravity = Vector3(0.0, -9.0, 0.0)
+	rain.process_material = pm
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.02, 0.55)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0.65, 0.75, 0.95, 0.30)
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y   # spin around Y only: streaks stay vertical
+	streak.material = m
+	rain.draw_pass_1 = streak
+	rain.position = Vector3(0.0, 24.0, 0.0)
+	stadium_root.add_child(rain)
+
+func set_rain_active(active: bool) -> void:
+	if rain == null:
+		return
+	rain.emitting = active
+	rain.visible = active
 
 func build_environment() -> void:
 	var world := WorldEnvironment.new()

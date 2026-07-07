@@ -8,6 +8,8 @@ var mf: MaterialFactory
 var pitch_root: Node3D
 var lines_root: Node3D
 var goals_root: Node3D
+# Goal side (-1 / +1) -> that goal's shared net ShaderMaterial (ripple uniforms).
+var net_materials := {}
 
 func build_pitch() -> void:
 	var field_size := Vector2(GameConfig.FIELD_HALF_WIDTH * 2.0 * GameConfig.FIELD_SCALE, GameConfig.FIELD_HALF_HEIGHT * 2.0 * GameConfig.FIELD_SCALE)
@@ -135,16 +137,25 @@ func _add_goal(side: int) -> void:
 	goal.add_child(back_bar)
 	goal.add_child(top_depth_a)
 	goal.add_child(top_depth_b)
-	var net_back := _net_panel("NetBack", Vector3(x + depth, height * 0.5, 0.0), Vector3(0.03, height, half_w * 2.0))
+	# All of this goal's net panels share one ShaderMaterial instance so the
+	# ripple triggered on a goal deforms only the net that was hit.
+	var net_mat := mf.make_net_material()
+	net_materials[side] = net_mat
+	var net_back := _net_panel("NetBack", Vector3(x + depth, height * 0.5, 0.0), Vector3(0.03, height, half_w * 2.0), net_mat)
 	goal.add_child(net_back)
-	var net_top := _net_panel("NetTop", Vector3(x + depth * 0.5, height, 0.0), Vector3(absf(depth), 0.03, half_w * 2.0))
+	var net_top := _net_panel("NetTop", Vector3(x + depth * 0.5, height, 0.0), Vector3(absf(depth), 0.03, half_w * 2.0), net_mat)
 	goal.add_child(net_top)
 	for net_side in [-1.0, 1.0]:
-		var panel := _net_panel("NetSide%d" % net_side, Vector3(x + depth * 0.5, height * 0.5, half_w * net_side), Vector3(absf(depth), height, 0.03))
+		var panel := _net_panel("NetSide%d" % net_side, Vector3(x + depth * 0.5, height * 0.5, half_w * net_side), Vector3(absf(depth), height, 0.03), net_mat)
 		goal.add_child(panel)
 
-func _net_panel(panel_name: String, pos: Vector3, size: Vector3) -> MeshInstance3D:
-	var panel := mf.make_mesh(panel_name, BoxMesh.new(), mf.materials.net, pos)
+func _net_panel(panel_name: String, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
+	var box := BoxMesh.new()
+	# Subdivided so the ripple shader has vertices to displace.
+	box.subdivide_width = 12
+	box.subdivide_height = 12
+	box.subdivide_depth = 12
+	var panel := mf.make_mesh(panel_name, box, mat, pos)
 	panel.mesh.size = size
 	panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return panel

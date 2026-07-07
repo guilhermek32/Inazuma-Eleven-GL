@@ -11,10 +11,14 @@ signal goal_scored(scorer: int)
 signal ball_kicked
 signal special_fired(info: Dictionary)
 signal field_reset
-# A restart (throw-in / corner / goal kick) was just awarded to `team`.
+# A restart (throw-in / corner / goal kick / free kick) was just awarded to `team`.
 signal restart_awarded(type: int, team: int)
+# `team` committed a foul (tackle from behind) at `spot`; a free kick follows.
+signal foul_committed(team: int, spot: Vector2)
+# A flagged player of `team` received a pass in an offside position.
+signal offside_called(team: int)
 
-enum Restart { KICKOFF, THROW_IN, CORNER, GOAL_KICK }
+enum Restart { KICKOFF, THROW_IN, CORNER, GOAL_KICK, FREE_KICK }
 
 var players_root: Node3D
 var player_factory: PlayerFactory
@@ -36,12 +40,21 @@ var restart_type := Restart.KICKOFF
 # consumed by the controller once it ends the goal freeze and resets for kickoff.
 var pending_kickoff_side := 0
 
+# Per-team match statistics for the full-time screen. Possession accumulates in
+# seconds of ownership; the rest are event counters bumped where they happen.
+var stats: Array[Dictionary] = [{}, {}]
+# Players flagged offside on the last pass by `offside_team`; judged when one of
+# them collects the loose ball, cleared on any kick / possession / restart.
+var offside_flags: Array[PlayerState] = []
+var offside_team := -1
+
 # How much nearer (normalized field units) a rival must be than the current switch
 # candidate before the "next player" ring moves to them. Hysteresis stops the ring
 # flickering between two near-equidistant players.
 const SWITCH_CANDIDATE_HYSTERESIS := 0.05
 
 func _init() -> void:
+	reset_stats()
 	for t in 2:
 		teams.append(TeamState.new())
 	teams[0].device = GameConfig.DEVICE_KBM
@@ -57,10 +70,17 @@ static func _kit_colors(kit_indices: Dictionary) -> Dictionary:
 func team_is_human(t: int) -> bool:
 	return teams[t].is_human()
 
+## Zeroes the per-team match statistics (called at the start of every match).
+func reset_stats() -> void:
+	for t in 2:
+		stats[t] = {"possession": 0.0, "shots": 0, "on_target": 0, "steals": 0, "fouls": 0, "offsides": 0}
+
 ## Advances one frame: kickoff timer, ball physics + goal detection, then each
 ## team's update. Returns the scoring side (-1 left, +1 right, 0 none).
 func step(delta: float) -> int:
 	_update_restart(delta)
+	if ball.owner_team >= 0:
+		stats[ball.owner_team].possession += delta
 	var scorer := _update_ball(delta)
 	if scorer != 0:
 		# Goal: fire confetti/whistle now, but skip the team updates this frame and leave
@@ -126,6 +146,7 @@ func reset_game(kickoff_side: int) -> void:
 	ball.special_name = ""
 	ball.special_color = Color(1.0, 1.0, 1.0)
 	restart_type = Restart.KICKOFF
+	_clear_offside_flags()
 	field_reset.emit()
 	_clear_owner()
 	for ts in teams:
@@ -157,6 +178,8 @@ func _reset_players(players: Array[PlayerState]) -> void:
 		p.stamina = 1.0
 		p.gk_shot_active = false
 		p.gk_react_timer = 0.0
+		p.gk_dive_timer = 0.0
+		p.gk_dive_dir = 0
 
 func _team_index_for_side(side: int) -> int:
 	if not teams[0].players.is_empty() and teams[0].players[0].side == side:
@@ -264,6 +287,7 @@ func _award_throw_in() -> void:
 ## Stops play, places the ball and the awarded team's taker at the spot, gives
 ## them possession and freezes everyone briefly (mirrors the kickoff freeze).
 func _award_restart(type: int, team_idx: int, spot: Vector2) -> void:
+	_clear_offside_flags()
 	ball.x = spot.x
 	ball.y = spot.y
 	ball.vx = 0.0
@@ -321,8 +345,9 @@ func _update_team(team_idx: int, delta: float) -> void:
 		var p := ts.players[i]
 		p.is_moving = false
 		# Live tackle window: expires into a whiff self-stun if no ball was won
-		# (a winning tackle zeroes the timer in _resolve_ball_capture).
-		if p.tackle_timer > 0.0:
+		# (a winning tackle zeroes the timer in _resolve_ball_capture). Frozen
+		# during restarts, like stun_timer, so nobody resumes play mid-stun.
+		if restart_timer <= 0.0 and p.tackle_timer > 0.0:
 			p.tackle_timer -= delta
 			if p.tackle_timer <= 0.0:
 				p.tackle_timer = 0.0
@@ -427,9 +452,9 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 				# press is never silently swallowed.
 				pass_target = _nearest_teammate(p, players)
 			if pass_target != null:
-				kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false)
+				kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
 			else:
-				kick_from_player(p, Vector2(p.x + p.facing_x, p.y + p.facing_y), GameConfig.PASS_POWER, false)
+				kick_from_player(p, Vector2(p.x + p.facing_x, p.y + p.facing_y), GameConfig.PASS_POWER, false, -1.0, true)
 		elif snap.shoot_held:
 			p.kick_power = minf(1.0, p.kick_power + delta * GameConfig.CHARGE_RATE)
 		elif snap.shoot_prev:
@@ -446,8 +471,11 @@ func _aim_target(snap: InputSnapshot, p: PlayerState) -> Vector2:
 	return Vector2(p.x, p.y) + dir
 
 ## `loft` is the vertical launch speed in world units; < 0 picks a default
-## (shots arc with charge, passes stay on the ground).
-func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: bool, loft := -1.0) -> void:
+## (shots arc with charge, passes stay on the ground). `is_pass` marks kicks
+## aimed at a teammate (they arm the offside flags); `is_shot` marks goal
+## attempts for the match statistics.
+func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: bool, loft := -1.0, is_pass := false, is_shot := false) -> void:
+	_clear_offside_flags()
 	var dir := target - Vector2(p.x, p.y)
 	if dir.length() <= 0.001:
 		dir = Vector2(p.facing_x, p.facing_y)
@@ -485,6 +513,12 @@ func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: 
 		ball.special_color = Color(1.0, 1.0, 1.0)
 		# Ordinary hard shots pick up a touch of random swerve; passes fly true.
 		ball.curve = randf_range(-1.0, 1.0) * GameConfig.HARD_SHOT_CURVE if power > 0.5 else 0.0
+	if is_shot or user_shot:
+		stats[p.team_index].shots += 1
+		if _shot_on_target(p):
+			stats[p.team_index].on_target += 1
+	if is_pass and settings != null and settings.offside_enabled:
+		_flag_offside_receivers(p)
 	ball.charging_power = 0.0
 	p.kick_power = 0.0
 	p.hold_timer = 0.0
@@ -497,6 +531,59 @@ func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: 
 	ball.y += ball.vy * 0.025
 	ball_kicked.emit()
 	p.play_action("kick", 0.7)
+
+## Straight-line estimate of whether the ball just kicked by `p` is heading
+## inside the goal mouth (ignores curve/friction — good enough for the stats).
+func _shot_on_target(p: PlayerState) -> bool:
+	var goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
+	if absf(ball.vx) < 0.001:
+		return false
+	var t := (goal_x - ball.x) / ball.vx
+	if t <= 0.0:
+		return false
+	return absf(ball.y + ball.vy * t) <= GameConfig.GOAL_HALF_WIDTH
+
+## Snapshots the offside line at the moment of a pass: teammates in the attacking
+## half, ahead of the ball and beyond the second-to-last defender are flagged.
+func _flag_offside_receivers(kicker: PlayerState) -> void:
+	offside_team = kicker.team_index
+	var attack := -float(kicker.side)   # attacking direction sign on x
+	# Second-to-last defender depth (the keeper is usually the last man).
+	var depths: Array[float] = []
+	for opp in teams[1 - kicker.team_index].players:
+		depths.append(opp.x * attack)
+	depths.sort()
+	depths.reverse()
+	var line: float = depths[1] if depths.size() >= 2 else 0.0
+	for mate in teams[kicker.team_index].players:
+		if mate == kicker:
+			continue
+		var depth := mate.x * attack
+		if depth <= 0.0 or depth <= ball.x * attack:
+			continue   # own half / level with or behind the ball: never offside
+		if depth > line + GameConfig.OFFSIDE_EPS:
+			offside_flags.append(mate)
+	if offside_flags.is_empty():
+		offside_team = -1
+
+func _clear_offside_flags() -> void:
+	offside_flags.clear()
+	offside_team = -1
+
+## A winning tackle counts as a foul when the tackler came from behind the
+## carrier (opposite the direction the carrier is facing).
+func _is_foul_tackle(tackler: PlayerState, carrier: PlayerState) -> bool:
+	var approach := Vector2(tackler.x - carrier.x, tackler.y - carrier.y)
+	if approach.length() < 0.001:
+		return false
+	return approach.normalized().dot(Vector2(carrier.facing_x, carrier.facing_y)) < GameConfig.FOUL_BEHIND_DOT
+
+## Free kicks are taken where the ball is, nudged inside the boundary and out of
+## the goalmouth (no penalty system — the spot is pushed up the pitch instead).
+func _free_kick_spot() -> Vector2:
+	var max_x := GameConfig.FIELD_BOUNDARY_X - GameConfig.FREE_KICK_MIN_GOAL_DIST
+	var max_y := GameConfig.FIELD_BOUNDARY_Y - 0.05
+	return Vector2(clampf(ball.x, -max_x, max_x), clampf(ball.y, -max_y, max_y))
 
 # Runs once per frame after both team updates: the globally nearest eligible player
 # wins the ball, so contested captures no longer favour the team updated first.
@@ -538,10 +625,28 @@ func _resolve_ball_capture() -> void:
 		return
 	var winner := teams[best_team].players[best_idx]
 	if owner == null:
+		# Offside: a flagged receiver collecting his team's pass concedes an
+		# indirect free kick instead of gaining possession.
+		if settings != null and settings.offside_enabled and best_team == offside_team and winner in offside_flags:
+			stats[best_team].offsides += 1
+			winner.tackle_timer = 0.0
+			offside_called.emit(best_team)
+			_award_restart(Restart.FREE_KICK, 1 - best_team, _free_kick_spot())
+			return
 		winner.tackle_timer = 0.0
 		_set_owner(best_team, best_idx)
 		winner.play_action("receive", 0.45)
 	else:
+		# A tackle from behind is a foul: no steal, free kick to the carrier's team.
+		if settings != null and settings.fouls_enabled and _is_foul_tackle(winner, owner):
+			stats[best_team].fouls += 1
+			winner.tackle_timer = 0.0
+			winner.stun_timer = GameConfig.TACKLE_WHIFF_STUN
+			winner.play_action("tackle", 0.55)
+			foul_committed.emit(best_team, Vector2(ball.x, ball.y))
+			_award_restart(Restart.FREE_KICK, 1 - best_team, _free_kick_spot())
+			return
+		stats[best_team].steals += 1
 		owner.stun_timer = GameConfig.TACKLE_STUN
 		owner.kick_power = 0.0
 		# Winning the ball consumes the tackle window (no whiff stun).
@@ -565,15 +670,16 @@ func clamp_player(p: PlayerState) -> void:
 	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		var area_limit := GameConfig.FIELD_BOUNDARY_X - GameConfig.PENALTY_AREA_WIDTH
 		if p.side == -1:
-			p.x = clampf(p.x, -GameConfig.FIELD_BOUNDARY_X + half, -area_limit + half)
+			p.x = clampf(p.x, -GameConfig.FIELD_BOUNDARY_X + half, -area_limit - half)
 		else:
-			p.x = clampf(p.x, area_limit - half, GameConfig.FIELD_BOUNDARY_X - half)
+			p.x = clampf(p.x, area_limit + half, GameConfig.FIELD_BOUNDARY_X - half)
 		p.y = clampf(p.y, -GameConfig.PENALTY_AREA_HEIGHT + half, GameConfig.PENALTY_AREA_HEIGHT - half)
 	else:
 		p.x = clampf(p.x, -GameConfig.FIELD_BOUNDARY_X + half, GameConfig.FIELD_BOUNDARY_X - half)
 		p.y = clampf(p.y, -GameConfig.FIELD_BOUNDARY_Y + half, GameConfig.FIELD_BOUNDARY_Y - half)
 
 func _set_owner(team_idx: int, player_idx: int) -> void:
+	_clear_offside_flags()
 	ball.owner_team = team_idx
 	ball.owner_index = player_idx
 	ball.last_touch_team = team_idx

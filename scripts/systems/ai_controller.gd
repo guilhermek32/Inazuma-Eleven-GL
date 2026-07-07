@@ -24,7 +24,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 			if p.hold_timer > 1.0:
 				var clear_target := best_pass_target(p, team, opponents, -float(p.side) * GameConfig.FIELD_BOUNDARY_X)
 				if clear_target != null:
-					sim.kick_from_player(p, Vector2(clear_target.x, clear_target.y), 0.45, false)
+					sim.kick_from_player(p, Vector2(clear_target.x, clear_target.y), 0.45, false, -1.0, true)
 				else:
 					# Long clearance: hoof it high upfield.
 					sim.kick_from_player(p, Vector2(-float(p.side) * 0.3, randf_range(-0.5, 0.5)), 0.7, false, GameConfig.CLEARANCE_LOFT)
@@ -38,6 +38,8 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 		var shot_inbound: bool = sim.ball.owner_team == -1 \
 			and sim.ball.vx * float(p.side) > GameConfig.GK_SHOT_SPEED \
 			and sim.ball.x * float(p.side) > 0.0
+		if p.gk_dive_timer > 0.0:
+			p.gk_dive_timer = maxf(0.0, p.gk_dive_timer - delta)
 		if shot_inbound:
 			if not p.gk_shot_active:
 				p.gk_shot_active = true
@@ -47,6 +49,14 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 				var time_to_line := absf(target_x - sim.ball.x) / maxf(absf(sim.ball.vx), 0.001)
 				var intercept_y := sim.ball.y + sim.ball.vy * time_to_line
 				target_y = clampf(intercept_y, -GameConfig.GOAL_HALF_WIDTH, GameConfig.GOAL_HALF_WIDTH)
+				# A wide intercept arriving fast triggers a dive: a sideways speed
+				# burst now, plus the dive pose in the view while the timer runs.
+				if p.gk_dive_timer <= 0.0 and absf(intercept_y - p.y) > GameConfig.GK_DIVE_MIN_OFFSET \
+						and time_to_line < GameConfig.GK_DIVE_TIME_TO_LINE:
+					p.gk_dive_timer = GameConfig.GK_DIVE_DURATION
+					p.gk_dive_dir = 1 if intercept_y > p.y else -1
+			if p.gk_dive_timer > 0.0:
+				current_speed *= GameConfig.GK_DIVE_SPEED_MULT
 		else:
 			p.gk_shot_active = false
 		sim.move_towards(p, Vector2(target_x, target_y), current_speed, delta)
@@ -117,7 +127,7 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 	if under_pressure and randf() < GameConfig.AI_PRESSURE_PASS_RATE * decision_scale * delta:
 		var pass_target := best_pass_target(p, team, opponents, target_goal_x)
 		if pass_target != null:
-			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false)
+			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
 			return
 	# Shoot when close enough and facing the goal.
 	var facing_goal := Vector2(target_goal_x - p.x, -p.y).normalized()
@@ -126,13 +136,13 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 	if dist_to_goal < shoot_range and randf() < GameConfig.AI_SHOOT_RATE * decision_scale * delta:
 		var aim_y := clampf(randf_range(-0.06, 0.06), -GameConfig.GOAL_HALF_WIDTH * 0.8, GameConfig.GOAL_HALF_WIDTH * 0.8)
 		var power := 0.65 + randf() * 0.2
-		sim.kick_from_player(p, Vector2(target_goal_x, aim_y), power, false)
+		sim.kick_from_player(p, Vector2(target_goal_x, aim_y), power, false, -1.0, false, true)
 		return
 	# Pass when a good option is available.
 	if randf() < GameConfig.AI_PASS_RATE * decision_scale * delta:
 		var pass_target := best_pass_target(p, team, opponents, target_goal_x)
 		if pass_target != null:
-			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false)
+			sim.kick_from_player(p, Vector2(pass_target.x, pass_target.y), GameConfig.PASS_POWER, false, -1.0, true)
 			return
 	# Dribble toward goal, steering slightly away from the nearest opponent.
 	var dribble := Vector2(target_goal_x - p.x, -p.y * 0.25)

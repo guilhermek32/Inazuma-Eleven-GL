@@ -11,6 +11,8 @@ var settings: SettingsStore
 var menu_layer: CanvasLayer
 var menu_panels := {}
 var fulltime_label: Label
+# One [value A label, value B label] pair per FULLTIME_STAT_ROWS entry.
+var fulltime_stat_labels: Array = []
 
 func build_menus() -> void:
 	menu_layer = CanvasLayer.new()
@@ -98,12 +100,44 @@ func _build_pause_panel() -> void:
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU))
 
+const FULLTIME_STAT_ROWS := [
+	["Possession", "possession"],
+	["Shots", "shots"],
+	["On target", "on_target"],
+	["Steals", "steals"],
+	["Fouls", "fouls"],
+	["Offsides", "offsides"],
+]
+
 func _build_fulltime_panel() -> void:
 	var panel := _make_panel("fulltime")
 	var vb := _make_vbox(panel)
 	fulltime_label = _make_title(vb, "FULL TIME")
+	# Broadcast-style stats table: value A | stat name | value B per row.
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 34)
+	grid.add_theme_constant_override("v_separation", 4)
+	vb.add_child(grid)
+	for row in FULLTIME_STAT_ROWS:
+		var val_a := _stats_cell("0", HORIZONTAL_ALIGNMENT_RIGHT)
+		var name_lbl := _stats_cell(row[0], HORIZONTAL_ALIGNMENT_CENTER)
+		name_lbl.add_theme_color_override("font_color", Color(1.0, 0.93, 0.55))
+		var val_b := _stats_cell("0", HORIZONTAL_ALIGNMENT_LEFT)
+		grid.add_child(val_a)
+		grid.add_child(name_lbl)
+		grid.add_child(val_b)
+		fulltime_stat_labels.append([val_a, val_b])
 	_make_button(vb, "Rematch", func() -> void: controller._start_match())
 	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU))
+
+func _stats_cell(text: String, align: int) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.horizontal_alignment = align
+	lbl.custom_minimum_size = Vector2(120, 0)
+	lbl.add_theme_font_size_override("font_size", 22)
+	return lbl
 
 func _build_settings_panel() -> void:
 	var panel := _make_panel("settings")
@@ -143,6 +177,26 @@ func _build_settings_panel() -> void:
 	camdist_opt.selected = settings.camera_distance
 	camdist_opt.item_selected.connect(func(i: int) -> void: settings.camera_distance = i; settings.apply(); settings.save())
 	_settings_row(vb, "Camera Distance", camdist_opt)
+
+	var fouls_check := CheckButton.new()
+	fouls_check.button_pressed = settings.fouls_enabled
+	fouls_check.toggled.connect(func(on: bool) -> void: settings.fouls_enabled = on; settings.save())
+	_settings_row(vb, "Fouls", fouls_check)
+
+	var offside_check := CheckButton.new()
+	offside_check.button_pressed = settings.offside_enabled
+	offside_check.toggled.connect(func(on: bool) -> void: settings.offside_enabled = on; settings.save())
+	_settings_row(vb, "Offside", offside_check)
+
+	var weather_opt := OptionButton.new()
+	weather_opt.add_item("Clear")
+	weather_opt.add_item("Rain")
+	weather_opt.selected = settings.weather
+	weather_opt.item_selected.connect(func(i: int) -> void:
+		settings.weather = i
+		settings.save()
+		controller._apply_weather())
+	_settings_row(vb, "Weather", weather_opt)
 
 	var fs_check := CheckButton.new()
 	fs_check.button_pressed = settings.fullscreen
@@ -209,3 +263,20 @@ func _focus_first_button(node: Control) -> bool:
 func set_fulltime_text(text: String) -> void:
 	if fulltime_label != null:
 		fulltime_label.text = text
+
+## Fills the full-time stats table. Possession is shown as percentages of the
+## combined ownership time; the other rows are plain counters. The value columns
+## are tinted with each team's shirt colour.
+func set_fulltime_stats(stats: Array[Dictionary], col_a: Color, col_b: Color) -> void:
+	var total_poss: float = maxf(0.001, stats[0].possession + stats[1].possession)
+	for i in FULLTIME_STAT_ROWS.size():
+		var key: String = FULLTIME_STAT_ROWS[i][1]
+		var pair: Array = fulltime_stat_labels[i]
+		if key == "possession":
+			pair[0].text = "%d%%" % roundi(stats[0].possession / total_poss * 100.0)
+			pair[1].text = "%d%%" % roundi(stats[1].possession / total_poss * 100.0)
+		else:
+			pair[0].text = str(stats[0][key])
+			pair[1].text = str(stats[1][key])
+		pair[0].add_theme_color_override("font_color", col_a.lightened(0.35))
+		pair[1].add_theme_color_override("font_color", col_b.lightened(0.35))

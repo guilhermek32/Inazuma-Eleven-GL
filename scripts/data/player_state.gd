@@ -28,6 +28,10 @@ var stamina := 1.0
 # shot is spotted; the keeper only chases the predicted intercept after it hits 0.
 var gk_react_timer := 0.0
 var gk_shot_active := false
+# Dive lunge toward a wide intercept: while > 0 the keeper bursts sideways and
+# the view plays/poses a dive toward gk_dive_dir (±1 in field y).
+var gk_dive_timer := 0.0
+var gk_dive_dir := 0
 var node: Node3D
 var uses_glb := false
 var animation_player: AnimationPlayer

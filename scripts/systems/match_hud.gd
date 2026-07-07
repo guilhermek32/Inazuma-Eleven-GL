@@ -189,16 +189,29 @@ func set_team_colors(col_a: Color, col_b: Color) -> void:
 		if sb != null:
 			sb.bg_color = col_b
 
+## Clears per-match state so a rematch doesn't inherit the previous score
+## (which would trigger a spurious goal flash on the first update).
+func reset() -> void:
+	_last_score = Vector2i(-1, -1)
+	_flash = 0.0
+	_banner_timer = 0.0
+	if banner != null:
+		banner.visible = false
+
 const RESTART_LABELS := {
 	MatchSimulation.Restart.KICKOFF: "Kickoff",
 	MatchSimulation.Restart.THROW_IN: "Throw-in",
 	MatchSimulation.Restart.CORNER: "Corner",
 	MatchSimulation.Restart.GOAL_KICK: "Goal kick",
+	MatchSimulation.Restart.FREE_KICK: "Free kick",
 }
 
 func update(score_left: int, score_right: int, game_state: int, restart_timer: float, restart_type: int, half_length: float, match_time: float, current_half: int, delta: float) -> void:
 	if panel == null:
 		return
+	# HUD animations run on wall-clock time so special-shot slow-mo
+	# (Engine.time_scale < 1) doesn't stretch the banner/goal flash.
+	delta /= maxf(Engine.time_scale, 0.05)
 	_tick_banner(delta)
 	panel.visible = game_state == GameConfig.GameState.PLAYING or game_state == GameConfig.GameState.PAUSED
 	if not panel.visible:
