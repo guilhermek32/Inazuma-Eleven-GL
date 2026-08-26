@@ -116,5 +116,5 @@ Its sources are under `src/` and `include/`; it is documented separately in
 
 ## Attribution
 
-Developed by **Antonio Guilherme** and **Davi Santos**. AI-assisted development was used
+Developed by **Antonio Guilherme** and **Davi Santos** with contributions from **Felipe Lira**. AI-assisted development was used
 for parts of the asset workflow and gameplay/physics implementation.
