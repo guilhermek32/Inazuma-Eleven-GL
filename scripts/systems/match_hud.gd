@@ -209,9 +209,8 @@ const RESTART_LABELS := {
 func update(score_left: int, score_right: int, game_state: int, restart_timer: float, restart_type: int, half_length: float, match_time: float, current_half: int, delta: float) -> void:
 	if panel == null:
 		return
-	# HUD animations run on wall-clock time so special-shot slow-mo
-	# (Engine.time_scale < 1) doesn't stretch the banner/goal flash.
-	delta /= maxf(Engine.time_scale, 0.05)
+	# `delta` is real (unscaled) time: special-shot slow-mo only slows the
+	# match and its 3D visuals, never the banner/goal flash.
 	_tick_banner(delta)
 	panel.visible = game_state == GameConfig.GameState.PLAYING or game_state == GameConfig.GameState.PAUSED
 	if not panel.visible:

@@ -24,7 +24,6 @@ const PHASE_SIDES := 0
 const PHASE_KIT := 1
 
 var controller
-var sim: MatchSimulation
 
 var setup_layer: CanvasLayer
 var sides_page: VBoxContainer
@@ -405,13 +404,12 @@ func _refresh_hint() -> void:
 func _launch() -> void:
 	var a: Variant = _chip_on_column(COL_RED)
 	var b: Variant = _chip_on_column(COL_BLUE)
-	sim.teams[0].device = a.device if a != null else GameConfig.DEVICE_AI
-	sim.teams[1].device = b.device if b != null else GameConfig.DEVICE_AI
+	var devices: Array[int] = [a.device if a != null else GameConfig.DEVICE_AI,
+			b.device if b != null else GameConfig.DEVICE_AI]
+	var formations: Array[int] = []
+	var kits: Array[Dictionary] = []
 	for t in 2:
-		sim.teams[t].formation = cfg_form[t].selected
-		sim.teams[t].kit = {
-			"shirt": GameConfig.KIT_PALETTE[cfg_shirt[t].selected].color,
-			"shorts": GameConfig.KIT_PALETTE[cfg_shorts[t].selected].color,
-			"boots": GameConfig.KIT_PALETTE[cfg_boots[t].selected].color,
-		}
+		formations.append(cfg_form[t].selected)
+		kits.append({"shirt": cfg_shirt[t].selected, "shorts": cfg_shorts[t].selected, "boots": cfg_boots[t].selected})
+	controller.set_match_lineup(devices, formations, kits)
 	controller._start_match()

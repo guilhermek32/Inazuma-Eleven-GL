@@ -10,6 +10,7 @@ extends Node
 const GK_STRAFE_MIN_VEL := 0.0012
 
 var sim: MatchSimulation
+var settings: SettingsStore   # camera presets only
 var material_factory: MaterialFactory
 var audio: AudioManager
 var ball_root: Node3D
@@ -22,6 +23,8 @@ var camera_3d: Camera3D
 var net_materials := {}
 var _ripple_side := 0
 var _ripple_t := 0.0
+
+var _anim_speed := 1.0
 
 var ball_trail: Array[MeshInstance3D] = []
 var ball_trail_points: Array[Vector3] = []
@@ -391,9 +394,9 @@ func _update_camera(delta: float) -> void:
 		return
 	var _fs := GameConfig.FIELD_SCALE
 	# Height and base distance are scaled by the player's chosen camera-angle preset.
-	var zoom := sim.settings.cam_zoom_mult
-	var cam_h := _fs * sim.settings.cam_height_mult * zoom
-	var cam_z := _fs * (4.0 / 3.0) * sim.settings.cam_dist_mult * zoom
+	var zoom := settings.cam_zoom_mult
+	var cam_h := _fs * settings.cam_height_mult * zoom
+	var cam_z := _fs * (4.0 / 3.0) * settings.cam_dist_mult * zoom
 	var follow_z := clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0))
 	# Keep the camera behind the ball along +z so it never crosses to the far side of it.
 	# If it did, look_at would swing ~180 deg and mirror the on-screen directions (mouse
@@ -443,8 +446,17 @@ func update_confetti(delta: float) -> void:
 			xform.basis = xform.basis.rotated(Vector3.RIGHT, delta * 8.0).rotated(Vector3.UP, delta * 10.0)
 			mm.set_instance_transform(slot, xform)
 
-func set_glb_animations_paused(paused: bool) -> void:
-	var speed := 0.0 if paused else 1.0
+## Sets the playback speed of every GLB skeleton: 0 pauses them, a value
+## below 1 follows the match's slow motion. Cheap to call every frame.
+func set_glb_animation_speed(speed: float) -> void:
+	if is_equal_approx(speed, _anim_speed):
+		return
+	_anim_speed = speed
+	refresh_animation_speed()
+
+## Re-applies the current speed after players were rebuilt.
+func refresh_animation_speed() -> void:
+	var speed := _anim_speed
 	for ts in sim.teams:
 		for p in ts.players:
 			if p.animation_player != null:

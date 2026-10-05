@@ -1,15 +1,15 @@
 class_name SettingsStore
 extends RefCounted
 
-## Holds tunable settings, persists them to disk, applies their side effects
-## (AI difficulty multipliers, window mode, audio volumes) and registers the
+## Holds the local player's preferences, persists them to disk, applies their
+## side effects (camera presets, window mode, audio volumes) and registers the
 ## keyboard/gamepad input actions used by the match.
+##
+## The game-rule preferences here (difficulty, half length, fouls, offside,
+## weather) only seed the MatchConfig of an *offline* match; they are never the
+## authoritative rules of a running match (see MatchConfig / MatchSession).
 
-var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard
-var ai_speed_mult := 1.0
-var ai_decision_mult := 1.0
-var ai_think_mult := 1.0       # scales the AI think interval (lower = faster thinking)
-var ai_aim_error := 0.03       # shot aim noise (normalized field units)
+var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard (index into MatchConfig.DIFFICULTY_PROFILES)
 var camera_angle := 1          # 0 Low, 1 Broadcast, 2 High, 3 Top-down
 var cam_height_mult := 1.0     # derived from camera_angle in _apply_settings()
 var cam_dist_mult := 1.0
@@ -33,12 +33,6 @@ func save() -> void:
 	_save_settings()
 
 func _apply_settings() -> void:
-	# Difficulty is intelligence, not velocity: harder AI thinks faster, aims
-	# better and lunges more decisively; the speed spread stays nearly flat.
-	match difficulty:
-		0: ai_speed_mult = 0.95; ai_decision_mult = 0.7; ai_think_mult = 1.5; ai_aim_error = GameConfig.AI_AIM_ERROR[0]
-		1: ai_speed_mult = 1.0; ai_decision_mult = 1.0; ai_think_mult = 1.0; ai_aim_error = GameConfig.AI_AIM_ERROR[1]
-		2: ai_speed_mult = 1.05; ai_decision_mult = 1.4; ai_think_mult = 0.7; ai_aim_error = GameConfig.AI_AIM_ERROR[2]
 	# Camera presets: higher height_mult + lower dist_mult => steeper, more top-down angle.
 	match camera_angle:
 		0: cam_height_mult = 0.66; cam_dist_mult = 1.12   # Low / cinematic
@@ -52,8 +46,10 @@ func _apply_settings() -> void:
 		1: cam_zoom_mult = 1.0     # Normal
 		2: cam_zoom_mult = 1.25    # Far
 		3: cam_zoom_mult = 1.55    # Very Far
-	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
-	DisplayServer.window_set_mode(mode)
+	# A headless process (tests, the match runtime) has no window to resize.
+	if DisplayServer.get_name() != "headless":
+		var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
+		DisplayServer.window_set_mode(mode)
 	apply_volumes()
 
 func load_settings() -> void:

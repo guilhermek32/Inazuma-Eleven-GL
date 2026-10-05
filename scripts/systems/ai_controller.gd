@@ -5,7 +5,8 @@ extends RefCounted
 ## dribble/pass/shoot choices, off-ball formation movement and pressing. Reads
 ## ball/player state and issues kicks/moves through the injected `sim` (the
 ## MatchSimulation), so random shoot/pass rolls scale with delta to stay
-## frame-rate independent.
+## frame-rate independent. Rolls use `sim.rng`, and each team's intelligence
+## comes from its MatchConfig difficulty profile (`sim.config.ai_profile`).
 
 var sim: MatchSimulation
 
@@ -13,10 +14,11 @@ var sim: MatchSimulation
 # by player index, so two near-equidistant players never both elect themselves presser.
 const PRESS_TIE_EPS := 0.02
 
-func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float, is_opponent: bool) -> void:
+func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], team_idx: int, player_idx: int, delta: float) -> void:
 	if p.stun_timer > 0.0:
 		p.stun_timer -= delta
-	var speed_scale: float = sim.settings.ai_speed_mult if is_opponent else 1.0
+	var profile: Dictionary = sim.config.ai_profile(team_idx)
+	var speed_scale: float = profile.speed
 	var current_speed: float = p.speed * speed_scale * (0.3 if p.stun_timer > 0.0 else 1.0)
 	if p.role == GameConfig.PlayerRole.GOALKEEPER:
 		if sim.ball.owner_team == team_idx and sim.ball.owner_index == player_idx:
@@ -31,7 +33,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 					sim.kick_from_player(p, sim.lead_pass_point(Vector2(p.x, p.y), clear_target), 0.45, false, -1.0, true)
 				else:
 					# Long clearance: hoof it high upfield.
-					sim.kick_from_player(p, Vector2(-float(p.side) * 0.3, randf_range(-0.5, 0.5)), 0.7, false, GameConfig.CLEARANCE_LOFT)
+					sim.kick_from_player(p, Vector2(-float(p.side) * 0.3, sim.rng.randf_range(-0.5, 0.5)), 0.7, false, GameConfig.CLEARANCE_LOFT)
 			return
 		p.hold_timer = 0.0
 		var target_y := clampf(sim.ball.y, -GameConfig.GOAL_HALF_WIDTH, GameConfig.GOAL_HALF_WIDTH)
@@ -47,7 +49,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 		if shot_inbound:
 			if not p.gk_shot_active:
 				p.gk_shot_active = true
-				p.gk_react_timer = GameConfig.GK_REACTION[sim.settings.difficulty] if is_opponent else GameConfig.GK_REACTION[1]
+				p.gk_react_timer = profile.gk_reaction
 			p.gk_react_timer = maxf(0.0, p.gk_react_timer - delta)
 			if p.gk_react_timer <= 0.0:
 				var time_to_line := absf(target_x - sim.ball.x) / maxf(absf(sim.ball.vx), 0.001)
@@ -66,7 +68,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 		sim.move_towards(p, Vector2(target_x, target_y), current_speed, delta)
 		return
 	if sim.ball.owner_team == team_idx and sim.ball.owner_index == player_idx:
-		_update_ai_owner(p, team, opponents, delta, is_opponent)
+		_update_ai_owner(p, team, opponents, delta, profile)
 		return
 	var own_team_has_ball: bool = sim.ball.owner_team == team_idx
 	var target := Vector2(p.start_x, p.start_y)
@@ -83,12 +85,12 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 				p.run_hold -= delta
 				target = p.run_target
 			elif p.run_timer <= 0.0:
-				p.run_timer = randf_range(GameConfig.AI_RUN_INTERVAL_MIN, GameConfig.AI_RUN_INTERVAL_MAX) * p.decide_jitter
+				p.run_timer = sim.rng.randf_range(GameConfig.AI_RUN_INTERVAL_MIN, GameConfig.AI_RUN_INTERVAL_MAX) * p.decide_jitter
 				# The attack alive in the final third: runs come far more often.
 				if sim.ball.x * attack_dir > 0.3:
 					p.run_timer *= 0.5
 				p.run_target = pick_run_target(p, opponents, attack_dir)
-				p.run_hold = GameConfig.AI_RUN_DURATION * randf_range(0.8, 1.25)
+				p.run_hold = GameConfig.AI_RUN_DURATION * sim.rng.randf_range(0.8, 1.25)
 				target = p.run_target
 	else:
 		var ball_owner: PlayerState = sim.owner_player()
@@ -109,12 +111,12 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 				current_speed *= GameConfig.SPRINT_MULT
 				p.stamina = maxf(0.0, p.stamina - GameConfig.SPRINT_DRAIN * delta)
 			# …and commits to a tackle lunge when it closes on the carrier.
-			var decision_scale: float = sim.settings.ai_decision_mult if is_opponent else 1.0
+			var decision_scale: float = profile.decision
 			if ball_owner != null and ball_owner.side != p.side and p.tackle_timer <= 0.0 and p.stun_timer <= 0.0 and not sim.restart_shield:
 				var carrier_dist := Vector2(ball_owner.x - p.x, ball_owner.y - p.y).length()
-				if carrier_dist < GameConfig.AI_TACKLE_RANGE and randf() < GameConfig.AI_TACKLE_RATE * decision_scale * delta:
+				if carrier_dist < GameConfig.AI_TACKLE_RANGE and sim.rng.randf() < GameConfig.AI_TACKLE_RATE * decision_scale * delta:
 					p.tackle_timer = GameConfig.TACKLE_WINDOW
-					p.play_action("tackle", 0.4)
+					sim.emit_player_action(p, "tackle", 0.4)
 		elif _is_presser(team, player_idx, 2):
 			# Second man in: cover goal-side of the presser so one dribble
 			# can't beat two players at once.
@@ -155,7 +157,7 @@ func update_ai_player(p: PlayerState, team: Array[PlayerState], opponents: Array
 # The carrier decides on think ticks (a human-like cadence with per-player
 # jitter) and commits to the chosen action between ticks. Being pressured pulls
 # the next think forward so the AI still reacts to an onrushing tackler.
-func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float, is_opponent: bool) -> void:
+func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], delta: float, profile: Dictionary) -> void:
 	var target_goal_x := GameConfig.FIELD_BOUNDARY_X if p.side == -1 else -GameConfig.FIELD_BOUNDARY_X
 	var nearest_opp_dist := INF
 	for opp in opponents:
@@ -164,9 +166,8 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 	if nearest_opp_dist < GameConfig.AI_PRESSURE_DIST:
 		p.think_timer = minf(p.think_timer, 0.08)
 	if p.think_timer <= 0.0:
-		var think_mult: float = sim.settings.ai_think_mult if is_opponent else 1.0
-		p.think_timer = GameConfig.AI_THINK_INTERVAL * think_mult * p.decide_jitter
-		if _decide_owner_action(p, team, opponents, target_goal_x, nearest_opp_dist, is_opponent):
+		p.think_timer = GameConfig.AI_THINK_INTERVAL * float(profile.think) * p.decide_jitter
+		if _decide_owner_action(p, team, opponents, target_goal_x, nearest_opp_dist, profile):
 			return   # ball was kicked
 	# Committed action between ticks: dribble the chosen direction — pushing on
 	# at near-full pace into open grass, more carefully when someone is close.
@@ -177,7 +178,7 @@ func _update_ai_owner(p: PlayerState, team: Array[PlayerState], opponents: Array
 
 ## One decision: scores shoot / pass / dribble-into-space and commits to the
 ## best. Returns true when the ball was played.
-func _decide_owner_action(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], target_goal_x: float, nearest_opp_dist: float, is_opponent: bool) -> bool:
+func _decide_owner_action(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], target_goal_x: float, nearest_opp_dist: float, profile: Dictionary) -> bool:
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
 	var facing_goal := Vector2(target_goal_x - p.x, -p.y).normalized()
 	var facing_dot := Vector2(p.facing_x, p.facing_y).dot(facing_goal)
@@ -202,8 +203,8 @@ func _decide_owner_action(p: PlayerState, team: Array[PlayerState], opponents: A
 	var dribble := _best_dribble(p, opponents, facing_goal)
 	var dribble_score: float = 0.6 + dribble.clearance * 3.0 - (1.2 if under_pressure else 0.0)
 	if shoot_score >= pass_score and shoot_score >= dribble_score:
-		var power := 0.65 + randf() * 0.2
-		sim.kick_from_player(p, pick_shot_target(p, opponents, target_goal_x, sim.settings.ai_aim_error if is_opponent else float(GameConfig.AI_AIM_ERROR[1])), power, false, -1.0, false, true)
+		var power := 0.65 + sim.rng.randf() * 0.2
+		sim.kick_from_player(p, pick_shot_target(p, opponents, target_goal_x, profile.aim_error), power, false, -1.0, false, true)
 		return true
 	if pass_score >= dribble_score and pass_target != null:
 		sim.kick_from_player(p, sim.lead_pass_point(Vector2(p.x, p.y), pass_target), GameConfig.PASS_POWER, false, -1.0, true)
@@ -217,7 +218,7 @@ func pick_shot_target(p: PlayerState, opponents: Array[PlayerState], target_goal
 	var corner := GameConfig.GOAL_HALF_WIDTH * 0.7
 	var keeper := _opposing_keeper(opponents)
 	var aim_y := -corner if keeper != null and keeper.y > 0.0 else corner
-	aim_y += randf_range(-1.0, 1.0) * aim_error
+	aim_y += sim.rng.randf_range(-1.0, 1.0) * aim_error
 	return Vector2(target_goal_x, clampf(aim_y, -GameConfig.GOAL_HALF_WIDTH * 0.85, GameConfig.GOAL_HALF_WIDTH * 0.85))
 
 func _opposing_keeper(opponents: Array[PlayerState]) -> PlayerState:

@@ -4,9 +4,11 @@ extends Node3D
 ##
 ## This is the script attached to scenes/main_3d.tscn. It owns no gameplay or
 ## rendering logic itself: _ready() builds the scene roots and wires the focused
-## modules together (config/, data/, build/, systems/), _process() delegates to
-## the simulation and the view, and the rest is the game-state machine and match
-## clock. See CLAUDE.md for the module map.
+## modules together (config/, data/, build/, match/, systems/). The match rules,
+## clock and halves live in MatchSession; this controller is the *offline
+## adapter* around it: local devices feed it input, and its drained events drive
+## the view, HUD and audio. The rest is the UI state machine (menus, pause).
+## See CLAUDE.md for the module map.
 
 # Scene roots (created in _build_scene_roots, populated by the builders)
 var camera_rig: Node3D
@@ -31,24 +33,19 @@ var audio: AudioManager
 var settings: SettingsStore
 var menu: MenuManager
 var setup: MatchSetup
-var sim: MatchSimulation
+var session: MatchSession
+var sim: MatchSimulation   # session.sim, read by the view/HUD for rendering
 var view: MatchView
 
-# Game state / flow
+# UI state machine (menus / pause); the match flow itself is session.phase.
 var game_state := GameConfig.GameState.MENU
 var prev_menu_state := GameConfig.GameState.MENU
-var match_time := 0.0
-var current_half := 1
-var halftime_pause := 0.0
-# Goal celebration: play freezes for this long after a goal (confetti + GOAL! banner +
-# crowd roar) before the field resets for the next kickoff.
-var goal_freeze := 0.0
-# Wall-clock (ms) at which a special-shot slow-mo should end; 0 when not slowed.
-var slowmo_until_ms := 0
 
-const GOAL_FREEZE_TIME := 2.2
-const SLOWMO_SCALE := 0.45
-const SLOWMO_MS := 520
+# Lineup chosen on the Choose Sides screen, reused by Restart/Rematch.
+# Defaults reproduce the 1P setup: red on keyboard+mouse, blue AI.
+var _lineup_devices: Array[int] = [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
+var _lineup_formations: Array[int] = [GameConfig.DEFAULT_FORMATION, GameConfig.DEFAULT_FORMATION]
+var _lineup_kits: Array[Dictionary] = [GameConfig.DEFAULT_KIT_A.duplicate(), GameConfig.DEFAULT_KIT_B.duplicate()]
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
@@ -86,23 +83,18 @@ func _ready() -> void:
 	settings.setup_input_actions()
 	player_factory = PlayerFactory.new()
 	player_factory.mf = material_factory
-	ai = AIController.new()
-	sim = MatchSimulation.new()
-	add_child(sim)
+	session = MatchSession.new()
+	sim = session.sim
+	ai = session.ai
 	view = MatchView.new()
 	add_child(view)
-	sim.players_root = players_root
-	sim.player_factory = player_factory
-	sim.ai = ai
-	sim.settings = settings
-	ai.sim = sim
 	view.sim = sim
+	view.settings = settings
 	view.material_factory = material_factory
 	view.ball_root = ball_root
 	view.vfx_root = vfx_root
 	view.camera_rig = camera_rig
 	view.camera_3d = camera_3d
-	sim.create_teams()
 	view.create_ball()
 	view.create_ball_trail()
 	view.create_grass_marks()
@@ -111,14 +103,6 @@ func _ready() -> void:
 	add_child(audio)
 	audio.build_audio()
 	view.audio = audio
-	# Gameplay events -> presentation. The sim never touches view/audio directly.
-	sim.goal_scored.connect(view.trigger_goal)
-	sim.ball_kicked.connect(audio.play_kick)
-	sim.special_fired.connect(_begin_special_shot)
-	sim.field_reset.connect(view.reset_trail)
-	sim.restart_awarded.connect(_on_restart_awarded)
-	sim.foul_committed.connect(_on_foul)
-	sim.offside_called.connect(_on_offside)
 	settings.audio = audio
 	settings.load_settings()
 	menu = MenuManager.new()
@@ -129,49 +113,37 @@ func _ready() -> void:
 	setup = MatchSetup.new()
 	add_child(setup)
 	setup.controller = self
-	setup.sim = sim
 	setup.build()
 	view.net_materials = pitch_builder.net_materials
-	sim.goal_scored.connect(_on_goal_net_ripple)
 	stadium_builder.build_weather()
-	_apply_weather()
-	sim.reset_game(1)
+	_initialize_session()
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
 	print("Inazuma Eleven 3D environment ready")
 
+func _exit_tree() -> void:
+	session.dispose()
+
 # Gameplay advances on the fixed physics tick so shot/capture outcomes don't vary
 # with the render frame rate; rendering-side updates stay in _process below.
 func _physics_process(delta: float) -> void:
-	_update_time_scale()
 	if game_state != GameConfig.GameState.PLAYING:
 		return
-	if halftime_pause > 0.0:
-		halftime_pause = maxf(0.0, halftime_pause - delta)
-	elif goal_freeze > 0.0:
-		goal_freeze = maxf(0.0, goal_freeze - delta)
-		if goal_freeze <= 0.0:
-			# If the clock already ran out while celebrating the goal,
-			# end the half/match instead of restarting for a kickoff.
-			if match_time >= settings.half_length:
-				_end_half()
-			else:
-				sim.reset_game(sim.pending_kickoff_side)
-	else:
-		input_reader.read(sim.teams, sim.restart_timer)
-		var scorer := sim.step(delta)
-		if scorer != 0:
-			_begin_goal_celebration(scorer)
-		else:
-			_update_match_clock(delta)
+	input_reader.read(sim.teams, sim.restart_timer)
+	session.step(delta)
+	_dispatch_events()
 
 func _process(delta: float) -> void:
+	# The match's slow motion slows its 3D visuals; HUD/menus keep real time.
+	var visual_delta := delta * session.time_scale
 	if game_state == GameConfig.GameState.PLAYING:
-		view.update_visuals(delta)
+		view.set_glb_animation_speed(session.time_scale)
+		view.update_visuals(visual_delta)
 	elif game_state == GameConfig.GameState.MATCH_SETUP:
 		setup.update(delta)
-	view.update_confetti(delta)
-	hud.update(sim.score_left, sim.score_right, game_state, sim.restart_timer, sim.restart_type, settings.half_length, match_time, current_half, delta)
+	view.update_confetti(visual_delta)
+	var st := session.read_state()
+	hud.update(st.score_left, st.score_right, game_state, st.restart_timer, st.restart_type, st.half_length_s, st.match_time, st.current_half, delta)
 	hud.update_stamina(_selected_stamina())
 
 ## Sprint stamina of each human team's selected player (-1 hides that bar).
@@ -185,17 +157,38 @@ func _selected_stamina() -> Array:
 			values[t] = ts.players[ts.selected_index].stamina
 	return values
 
-## Restores normal speed once a special-shot slow-mo has run its (wall-clock) course.
-func _update_time_scale() -> void:
-	if slowmo_until_ms > 0 and Time.get_ticks_msec() >= slowmo_until_ms:
-		slowmo_until_ms = 0
-		Engine.time_scale = 1.0
-
-func _begin_special_shot(info: Dictionary) -> void:
-	slowmo_until_ms = Time.get_ticks_msec() + SLOWMO_MS
-	Engine.time_scale = SLOWMO_SCALE
-	hud.show_banner("%s!" % info.name, info.color, 1.1, false)
-	audio.play_special()
+## Presentation adapter: turns the session's gameplay events into view, HUD
+## and audio cues. The session never touches presentation directly.
+func _dispatch_events() -> void:
+	for ev in session.drain_events():
+		match ev.type:
+			"goal":
+				_on_goal(ev)
+			"kick":
+				audio.play_kick()
+			"special":
+				hud.show_banner("%s!" % ev.name, ev.color, 1.1, false)
+				audio.play_special()
+			"field_reset":
+				view.reset_trail()
+			"restart":
+				_on_restart_awarded(ev.restart_type, ev.team)
+			"foul":
+				# Fouls/offside show their own banner; the FREE_KICK restart that follows is
+				# deliberately absent from _on_restart_awarded's labels so they don't double-fire
+				# (the restart still shows as "Free kick" in the HUD timer text).
+				hud.show_banner("FOUL!", Color(1.0, 0.85, 0.3), 0.9, false)
+				audio.play_whistle()
+			"offside":
+				hud.show_banner("OFFSIDE", Color(1.0, 0.55, 0.2), 0.9, false)
+				audio.play_whistle()
+			"player_action":
+				sim.teams[ev.team].players[ev.index].play_action(ev.action, ev.duration)
+			"half_time":
+				audio.play_whistle()
+				hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
+			"full_time":
+				_end_match(ev)
 
 func _on_restart_awarded(type: int, team: int) -> void:
 	var labels := {
@@ -208,30 +201,14 @@ func _on_restart_awarded(type: int, team: int) -> void:
 	hud.show_banner(labels[type], sim.teams[team].kit.shirt, 1.0, false)
 	audio.play_whistle()
 
-# Fouls/offside show their own banner; the FREE_KICK restart that follows is
-# deliberately absent from _on_restart_awarded's labels so they don't double-fire
-# (the restart still shows as "Free kick" in the HUD timer text).
-func _on_goal_net_ripple(_scorer: int) -> void:
-	# pending_kickoff_side is the side whose goal was just hit.
-	var impact := GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), sim.ball.h + GameConfig.BALL_RADIUS)
-	view.trigger_net_ripple(sim.pending_kickoff_side, impact)
-
-func _on_foul(_team: int, _spot: Vector2) -> void:
-	hud.show_banner("FOUL!", Color(1.0, 0.85, 0.3), 0.9, false)
-	audio.play_whistle()
-
-func _on_offside(_team: int) -> void:
-	hud.show_banner("OFFSIDE", Color(1.0, 0.55, 0.2), 0.9, false)
-	audio.play_whistle()
-
-func _begin_goal_celebration(scorer: int) -> void:
-	# Drop any active slow-mo, then freeze the field for the celebration. The confetti
-	# and whistle already fired inside sim.step(); the reset waits for the freeze to end.
-	Engine.time_scale = 1.0
-	slowmo_until_ms = 0
-	goal_freeze = GOAL_FREEZE_TIME
-	var col: Color = sim.teams[0].kit.shirt if scorer < 0 else sim.teams[1].kit.shirt
-	hud.show_banner("GOAL!", col, GOAL_FREEZE_TIME)
+## Goal: confetti + whistle, the net ripple at the impact point, then the GOAL!
+## banner and crowd roar for the session's celebration freeze.
+func _on_goal(ev: Dictionary) -> void:
+	view.trigger_goal(ev.scorer)
+	var impact: Vector3 = ev.impact
+	view.trigger_net_ripple(ev.goal_side, GameConfig.to_3d(Vector2(impact.x, impact.y), impact.z + GameConfig.BALL_RADIUS))
+	var col: Color = sim.teams[0].kit.shirt if ev.scorer < 0 else sim.teams[1].kit.shirt
+	hud.show_banner("GOAL!", col, MatchSession.GOAL_FREEZE_TIME)
 	audio.play_crowd_roar()
 
 func _input(event: InputEvent) -> void:
@@ -254,76 +231,92 @@ func _input(event: InputEvent) -> void:
 func _set_game_state(next: int) -> void:
 	# Never leave the world in slow-mo when we step out of live play (pause, menus, …).
 	if next != GameConfig.GameState.PLAYING:
-		Engine.time_scale = 1.0
-		slowmo_until_ms = 0
+		session.cancel_slow_motion()
 	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	var leaving_setup := game_state == GameConfig.GameState.MATCH_SETUP and next != GameConfig.GameState.MATCH_SETUP
 	game_state = next
-	view.set_glb_animations_paused(next != GameConfig.GameState.PLAYING)
+	view.set_glb_animation_speed(session.time_scale if next == GameConfig.GameState.PLAYING else 0.0)
 	if next == GameConfig.GameState.MATCH_SETUP:
 		setup.enter()
 	elif leaving_setup:
 		setup.exit()
 	menu.show_for_state(next)
 
+## Called by the Choose Sides screen before _start_match(); Restart/Rematch
+## reuse the last lineup.
+func set_match_lineup(devices: Array[int], formations: Array[int], kits: Array[Dictionary]) -> void:
+	_lineup_devices = devices.duplicate()
+	_lineup_formations = formations.duplicate()
+	_lineup_kits = kits.duplicate(true)
+
 func _start_match() -> void:
-	sim.score_left = 0
-	sim.score_right = 0
-	match_time = 0.0
-	current_half = 1
-	halftime_pause = 0.0
-	goal_freeze = 0.0
-	Engine.time_scale = 1.0
-	slowmo_until_ms = 0
 	view.clear_confetti()
-	# Rebuild both teams from the formation/kit picked on the Choose Sides screen.
-	sim.create_teams()
+	_initialize_session()
 	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
 	hud.reset()
-	sim.reset_stats()
-	_apply_weather()
-	sim.set_default_ends()
-	sim.reset_game(1)
 	_set_game_state(GameConfig.GameState.PLAYING)
 	audio.play_whistle()
 
-func _update_match_clock(delta: float) -> void:
-	match_time += delta
-	if match_time >= settings.half_length:
-		_end_half()
+## Starts a fresh session from the lineup + local rule preferences, then
+## rebuilds the player visuals for the new PlayerStates.
+func _initialize_session() -> void:
+	for t in 2:
+		session.set_team_device(t, _lineup_devices[t])
+	session.initialize(_build_match_config(), randi())
+	_rebuild_player_visuals()
+	_apply_weather()
 
-## Advances out of the current half: half time after the first, full time after the second.
-func _end_half() -> void:
-	if current_half == 1:
-		current_half = 2
-		match_time = 0.0
-		halftime_pause = 2.0
-		sim.switch_ends()
-		sim.reset_game(1)
-		audio.play_whistle()
-		hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
-	else:
-		_end_match()
+## Offline MatchConfig: rules from the saved preferences, teams from the lineup.
+## A human-led team's AI teammates play at Normal and an AI team at the chosen
+## difficulty, as before the session existed.
+func _build_match_config() -> MatchConfig:
+	var cfg := MatchConfig.new()
+	cfg.half_length_s = clampf(settings.half_length, MatchConfig.MIN_HALF_LENGTH_S, MatchConfig.MAX_HALF_LENGTH_S)
+	cfg.fouls_enabled = settings.fouls_enabled
+	cfg.offside_enabled = settings.offside_enabled
+	cfg.weather = clampi(settings.weather, 0, 1)
+	for t in 2:
+		cfg.formations[t] = _lineup_formations[t]
+		cfg.kits[t] = _lineup_kits[t].duplicate()
+		var is_ai := _lineup_devices[t] == GameConfig.DEVICE_AI
+		cfg.team_difficulty[t] = clampi(settings.difficulty, 0, 2) if is_ai else MatchConfig.DIFFICULTY_NORMAL
+	return cfg
 
-func _end_match() -> void:
+func _rebuild_player_visuals() -> void:
+	for child in players_root.get_children():
+		players_root.remove_child(child)
+		child.queue_free()
+	for ts in sim.teams:
+		for p in ts.players:
+			p.node = player_factory.create_player_visual(p, ts.kit)
+			players_root.add_child(p.node)
+			var lbl := p.node.get_node_or_null("JerseyNumber") as Label3D
+			if lbl:
+				lbl.text = str(p.jersey_number)
+	view.refresh_animation_speed()
+
+func _end_match(ev: Dictionary) -> void:
 	audio.play_whistle()
 	var result := "DRAW"
-	if sim.score_left > sim.score_right:
+	if ev.score_left > ev.score_right:
 		result = "TIME A WINS"
-	elif sim.score_right > sim.score_left:
+	elif ev.score_right > ev.score_left:
 		result = "TIME B WINS"
-	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [sim.score_left, sim.score_right, result])
-	menu.set_fulltime_stats(sim.stats, sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
+	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [ev.score_left, ev.score_right, result])
+	menu.set_fulltime_stats(ev.stats, sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
 	_set_game_state(GameConfig.GameState.FULLTIME)
 
-## Applies the selected weather: rain particles + wet pitch + slicker ball.
-## Called on startup, at match start and when the setting changes.
+## Shows rain + a wet pitch. During a match this follows the match's own
+## MatchConfig (which also fixed the ball friction at kickoff); in the menus it
+## previews the saved preference. A weather change made from the pause menu
+## therefore applies from the next match, like every other rule.
 func _apply_weather() -> void:
-	var raining: bool = settings.weather == 1
+	var in_match := game_state == GameConfig.GameState.PLAYING or game_state == GameConfig.GameState.PAUSED \
+			or (game_state == GameConfig.GameState.SETTINGS and prev_menu_state == GameConfig.GameState.PAUSED)
+	var raining: bool = (session.config.weather if in_match else settings.weather) == 1
 	stadium_builder.set_rain_active(raining)
 	material_factory.set_pitch_wet(raining)
-	sim.ball.friction = GameConfig.RAIN_BALL_FRICTION if raining else GameConfig.BALL_FRICTION
 
 func _on_joy_connection_changed(_device: int, _connected: bool) -> void:
 	if game_state == GameConfig.GameState.MATCH_SETUP:

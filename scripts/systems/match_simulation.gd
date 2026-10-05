@@ -17,13 +17,19 @@ signal restart_awarded(type: int, team: int)
 signal foul_committed(team: int, spot: Vector2)
 # A flagged player of `team` received a pass in an offside position.
 signal offside_called(team: int)
+# A one-shot animation cue (kick/receive/tackle) for teams[team].players[index].
+# Presentation plays the clip; the rules never touch animation state.
+signal player_action(team: int, index: int, action: String, duration: float)
 
 enum Restart { KICKOFF, THROW_IN, CORNER, GOAL_KICK, FREE_KICK }
 
-var players_root: Node3D
-var player_factory: PlayerFactory
 var ai: AIController
-var settings: SettingsStore
+# Gameplay rules for this match (fouls/offside toggles, per-team AI difficulty).
+# MatchSession installs its private copy; the default suits the headless tests.
+var config := MatchConfig.new()
+# Every gameplay random roll goes through this generator (never the global
+# random functions), so a seeded match replays identically within one build.
+var rng := RandomNumberGenerator.new()
 
 # teams[0] = Time A (red, starts on -x), teams[1] = Time B. Each TeamState holds
 # the players plus the setup-screen config (device/formation/kit) and the human
@@ -66,10 +72,14 @@ func _init() -> void:
 		teams.append(TeamState.new())
 	teams[0].device = GameConfig.DEVICE_KBM
 	teams[1].device = GameConfig.DEVICE_AI
-	teams[0].kit = _kit_colors(GameConfig.DEFAULT_KIT_A)
-	teams[1].kit = _kit_colors(GameConfig.DEFAULT_KIT_B)
+	teams[0].kit = kit_colors(GameConfig.DEFAULT_KIT_A)
+	teams[1].kit = kit_colors(GameConfig.DEFAULT_KIT_B)
 
-static func _kit_colors(kit_indices: Dictionary) -> Dictionary:
+func seed_rng(seed_value: int) -> void:
+	rng.seed = seed_value
+
+## Resolves KIT_PALETTE indices {"shirt", "shorts", "boots"} into Colors.
+static func kit_colors(kit_indices: Dictionary) -> Dictionary:
 	return {"shirt": GameConfig.KIT_PALETTE[kit_indices.shirt].color,
 			"shorts": GameConfig.KIT_PALETTE[kit_indices.shorts].color,
 			"boots": GameConfig.KIT_PALETTE[kit_indices.boots].color}
@@ -101,14 +111,9 @@ func step(delta: float) -> int:
 		_resolve_ball_capture()
 	return scorer
 
+## Rebuilds both teams' PlayerStates from their formation. Re-runnable; the
+## caller rebuilds any visuals afterwards (the sim never creates scene nodes).
 func create_teams() -> void:
-	# Re-runnable: drop existing player nodes so a fresh formation/kit can be built.
-	# players_root/player_factory may be null in the headless test harness, which
-	# runs the simulation without any 3D representation.
-	if players_root != null:
-		for child in players_root.get_children():
-			players_root.remove_child(child)
-			child.queue_free()
 	for t in 2:
 		var ts := teams[t]
 		ts.players.clear()
@@ -126,20 +131,12 @@ func _assign_jerseys(players: Array[PlayerState]) -> void:
 	# GK wears 1; the rest are numbered by their slot in the formation list.
 	for i in players.size():
 		players[i].jersey_number = i + 1
-		if players[i].node == null:
-			continue
-		var lbl := players[i].node.get_node_or_null("JerseyNumber") as Label3D
-		if lbl:
-			lbl.text = str(i + 1)
 
 func _add_player(ts: TeamState, px: float, py: float, speed: float, side: int, role: int) -> void:
 	var state := PlayerState.new(px, py, speed, side, role)
 	# Personality: small per-player variation so decisions and runs de-sync.
-	state.decide_jitter = randf_range(0.8, 1.2)
-	state.aggression = randf_range(0.8, 1.2)
-	if player_factory != null and players_root != null:
-		state.node = player_factory.create_player_visual(state, ts.kit)
-		players_root.add_child(state.node)
+	state.decide_jitter = rng.randf_range(0.8, 1.2)
+	state.aggression = rng.randf_range(0.8, 1.2)
 	ts.players.append(state)
 
 func reset_game(kickoff_side: int) -> void:
@@ -196,7 +193,7 @@ func _reset_players(players: Array[PlayerState]) -> void:
 		p.gk_dive_dir = 0
 		p.think_timer = 0.0
 		p.dribble_dir = Vector2.ZERO
-		p.run_timer = randf_range(1.0, GameConfig.AI_RUN_INTERVAL_MAX)   # stagger first runs
+		p.run_timer = rng.randf_range(1.0, GameConfig.AI_RUN_INTERVAL_MAX)   # stagger first runs
 		p.run_hold = 0.0
 
 func _team_index_for_side(side: int) -> int:
@@ -444,7 +441,7 @@ func _update_team(team_idx: int, delta: float) -> void:
 		if restart_timer <= 0.0 and is_user_team and i == user_idx:
 			_update_user_player(p, snap, team_idx, i, delta, ts.players, opponents)
 		elif restart_timer <= 0.0:
-			ai.update_ai_player(p, ts.players, opponents, team_idx, i, delta, not is_user_team)
+			ai.update_ai_player(p, ts.players, opponents, team_idx, i, delta)
 
 func _handle_user_selection(ts: TeamState) -> void:
 	var team_idx := teams.find(ts)
@@ -529,7 +526,7 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 	var is_carrier := ball.owner_team == team_idx and ball.owner_index == player_idx
 	if snap.tackle_pressed and not is_carrier and p.stun_timer <= 0.0 and p.tackle_timer <= 0.0:
 		p.tackle_timer = GameConfig.TACKLE_WINDOW
-		p.play_action("tackle", 0.4)
+		emit_player_action(p, "tackle", 0.4)
 	apply_movement(p, snap.axis * p.speed * speed_mult, delta)
 	if ball.owner_team == team_idx and ball.owner_index == player_idx:
 		ball.charging_power = p.kick_power
@@ -597,10 +594,10 @@ func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: 
 	var dist_to_goal := Vector2(target_goal_x - p.x, -p.y).length()
 	# A fully-charged shot toward goal "evolves" into a named special: the user always
 	# triggers one at full charge; the AI does so on a coin-flip when it shoots that hard.
-	var is_named := power >= GameConfig.SPECIAL_SHOT_CHARGE and dist_to_goal < 0.95 and (user_shot or randf() < 0.5)
+	var is_named := power >= GameConfig.SPECIAL_SHOT_CHARGE and dist_to_goal < 0.95 and (user_shot or rng.randf() < 0.5)
 	ball.is_super_shot = is_named or (power > 0.5 and dist_to_goal < 0.55)
 	if is_named:
-		var pick: Dictionary = GameConfig.SPECIAL_SHOTS[randi() % GameConfig.SPECIAL_SHOTS.size()]
+		var pick: Dictionary = GameConfig.SPECIAL_SHOTS[rng.randi() % GameConfig.SPECIAL_SHOTS.size()]
 		ball.special_name = pick.name
 		ball.special_color = pick.color
 		ball.curve = pick.curve
@@ -613,12 +610,12 @@ func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: 
 		ball.special_name = ""
 		ball.special_color = Color(1.0, 1.0, 1.0)
 		# Ordinary hard shots pick up a touch of random swerve; passes fly true.
-		ball.curve = randf_range(-1.0, 1.0) * GameConfig.HARD_SHOT_CURVE if power > 0.5 else 0.0
+		ball.curve = rng.randf_range(-1.0, 1.0) * GameConfig.HARD_SHOT_CURVE if power > 0.5 else 0.0
 	if is_shot or user_shot:
 		stats[p.team_index].shots += 1
 		if _shot_on_target(p):
 			stats[p.team_index].on_target += 1
-	if is_pass and settings != null and settings.offside_enabled:
+	if is_pass and config.offside_enabled:
 		_flag_offside_receivers(p)
 	ball.charging_power = 0.0
 	p.kick_power = 0.0
@@ -631,7 +628,7 @@ func kick_from_player(p: PlayerState, target: Vector2, power: float, user_shot: 
 	ball.x += ball.vx * 0.025
 	ball.y += ball.vy * 0.025
 	ball_kicked.emit()
-	p.play_action("kick", 0.7)
+	emit_player_action(p, "kick", 0.7)
 
 ## Straight-line estimate of whether the ball just kicked by `p` is heading
 ## inside the goal mouth (ignores curve/friction — good enough for the stats).
@@ -736,7 +733,7 @@ func _resolve_ball_capture() -> void:
 	if owner == null:
 		# Offside: a flagged receiver collecting his team's pass concedes an
 		# indirect free kick instead of gaining possession.
-		if settings != null and settings.offside_enabled and best_team == offside_team and winner in offside_flags:
+		if config.offside_enabled and best_team == offside_team and winner in offside_flags:
 			stats[best_team].offsides += 1
 			winner.tackle_timer = 0.0
 			offside_called.emit(best_team)
@@ -744,14 +741,14 @@ func _resolve_ball_capture() -> void:
 			return
 		winner.tackle_timer = 0.0
 		_set_owner(best_team, best_idx)
-		winner.play_action("receive", 0.45)
+		emit_player_action(winner, "receive", 0.45)
 	else:
 		# A tackle from behind is a foul: no steal, free kick to the carrier's team.
-		if settings != null and settings.fouls_enabled and _is_foul_tackle(winner, owner):
+		if config.fouls_enabled and _is_foul_tackle(winner, owner):
 			stats[best_team].fouls += 1
 			winner.tackle_timer = 0.0
 			winner.stun_timer = GameConfig.TACKLE_WHIFF_STUN
-			winner.play_action("tackle", 0.55)
+			emit_player_action(winner, "tackle", 0.55)
 			foul_committed.emit(best_team, Vector2(ball.x, ball.y))
 			_award_restart(Restart.FREE_KICK, 1 - best_team, _free_kick_spot())
 			return
@@ -761,7 +758,11 @@ func _resolve_ball_capture() -> void:
 		# Winning the ball consumes the tackle window (no whiff stun).
 		winner.tackle_timer = 0.0
 		_set_owner(best_team, best_idx)
-		winner.play_action("tackle", 0.55)
+		emit_player_action(winner, "tackle", 0.55)
+
+## Announces a one-shot animation cue for `p` (see the player_action signal).
+func emit_player_action(p: PlayerState, action: String, duration: float) -> void:
+	player_action.emit(p.team_index, teams[p.team_index].players.find(p), action, duration)
 
 func move_towards(p: PlayerState, target: Vector2, current_speed: float, delta: float) -> void:
 	var diff := target - Vector2(p.x, p.y)
