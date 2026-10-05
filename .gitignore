@@ -3,3 +3,6 @@ RonaldinhoSoccer
 obj/
 .godot/
 .claude/
+
+# Godot export output
+build/

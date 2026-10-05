@@ -15,8 +15,9 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 [application]
 
 config/name="Inazuma Eleven GL Godot"
-run/main_scene="res://scenes/main_3d.tscn"
+run/main_scene="res://scenes/bootstrap.tscn"
 config/features=PackedStringArray("4.7")
+run/flush_stdout_on_print=true
 
 [display]
 
@@ -24,3 +25,7 @@ window/size/viewport_width=1600
 window/size/viewport_height=900
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method.web="gl_compatibility"

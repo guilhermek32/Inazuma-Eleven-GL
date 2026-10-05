@@ -1,0 +1,59 @@
+# Online deployment. Milestone 0: gateway + match runtime.
+# Lobby, results, PostgreSQL and the optional ai-bot join in later milestones.
+#
+#   docker compose up --build          # then open http://localhost:8080
+#   http://localhost:8080/?netprobe    # browser -> gateway -> runtime WebSocket check
+#
+# Godot's web build only starts in a secure context: http://localhost works for
+# local play, but any other host needs HTTPS. Set SITE_ADDRESS to the public
+# domain (e.g. SITE_ADDRESS=game.example.com) and Caddy obtains a certificate.
+#
+# Only the gateway publishes a port; every other service sits on the internal
+# network, which has no route to the outside world.
+
+name: inazuma-online
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: tools/godot/Dockerfile
+      target: gateway
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${GATEWAY_HTTP_PORT:-8080}:80"
+      - "${GATEWAY_HTTPS_PORT:-8443}:443"
+    volumes:
+      - caddy-data:/data
+    networks: [public, internal]
+    depends_on:
+      match-runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  match-runtime:
+    build:
+      context: .
+      dockerfile: tools/godot/Dockerfile
+      target: match-runtime
+    environment:
+      MATCH_RUNTIME_PORT: "8910"
+    volumes:
+      - runtime-data:/data
+    networks: [internal]
+    restart: unless-stopped
+
+networks:
+  public: {}
+  internal:
+    internal: true
+
+volumes:
+  caddy-data: {}
+  runtime-data: {}

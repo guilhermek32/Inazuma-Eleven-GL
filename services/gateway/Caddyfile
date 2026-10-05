@@ -1,0 +1,51 @@
+# Public gateway: the only container with published ports.
+#
+# SITE_ADDRESS selects the mode:
+#   :80                 plain HTTP (local `docker compose up`)
+#   game.example.com    automatic HTTPS (Let's Encrypt) for a real deployment
+#
+# Routes
+#   /ws/game/<match_id>  WebSocket upgrade, proxied to the match runtime
+#   /healthz             gateway liveness
+#   everything else      the Godot web export (static files)
+#
+# The web export is single-threaded, so COOP/COEP headers are not required.
+
+{
+	admin off
+}
+
+{$SITE_ADDRESS::80} {
+	log {
+		output stdout
+		format json
+	}
+
+	# The standard encode handler offers zstd and gzip (no dynamic Brotli in the
+	# stock image). Its default type list omits the Godot pack and wasm-adjacent
+	# types, so match them explicitly.
+	encode zstd gzip {
+		match {
+			header Content-Type text/*
+			header Content-Type application/javascript*
+			header Content-Type application/json*
+			header Content-Type application/wasm*
+			header Content-Type application/octet-stream*
+		}
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle /ws/game/* {
+		reverse_proxy match-runtime:8910
+	}
+
+	handle {
+		@pck path *.pck
+		header @pck Content-Type application/octet-stream
+		root * /srv/web
+		file_server
+	}
+}

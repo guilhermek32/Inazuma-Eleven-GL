@@ -1,7 +1,7 @@
 # Inazuma Eleven GL
 
 An arcade 11-v-11 football game inspired by *Inazuma Eleven*. The active project is a
-**Godot 4.6 3D build** with a night-stadium broadcast presentation; the original
+**Godot 4.7 3D build** with a night-stadium broadcast presentation; the original
 C++/OpenGL build remains in the repo as a legacy reference.
 
 > For the full technical write-up — runtime flow, module map, and how each grading
@@ -25,14 +25,19 @@ C++/OpenGL build remains in the repo as a legacy reference.
 
 ### Run it
 
-The engine is Godot **4.6** (installed here as the `godot-4` snap):
+The engine is Godot **4.7** (pinned to 4.7.2; `godot-4` below is any 4.7 editor binary):
 
 ```bash
 godot-4 --path .                              # run interactively
 godot-4 --headless --quit-after 5 --path .    # smoke test (prints "...environment ready")
 ```
 
-The main scene is `scenes/main_3d.tscn`. The entire scene — pitch, stadium, lights,
+No local Godot? The pinned, checksum-verified engine runs in Docker
+(`tools/godot/Dockerfile`); see **Tests** below.
+
+The project's main scene is `scenes/bootstrap.tscn`, which picks the process role
+(3D game, `-- --server` match runtime, or `?netprobe` on the web) and then loads
+`scenes/main_3d.tscn` for the game. The entire scene — pitch, stadium, lights,
 players, ball and UI — is built **procedurally in code** at runtime, not authored in the
 `.tscn`; the scene is just a `Node3D` with `scripts/match_controller_3d.gd` attached.
 
@@ -62,12 +67,18 @@ off. This supports 1-player-vs-AI and 2-player local versus.
 
 Gameplay runs as a **2.5D model**: all logic lives in a normalized 2D field
 (`x ∈ ±0.98`, `y ∈ ±0.78`) with no physics engine, and `GameConfig.to_3d()` projects it
-into the 3D world (`FIELD_SCALE = 24`). `match_controller_3d.gd` is a thin **orchestrator**:
-`_ready()` wires the modules, `_process()` delegates to the simulation and the view.
+into the 3D world (`FIELD_SCALE = 24`). `match_controller_3d.gd` is a thin **orchestrator** and the offline adapter around
+`MatchSession`, the reusable match component that the online match runtime also drives.
 
 ```
 scripts/
-  match_controller_3d.gd      # orchestrator: boot, state machine, match clock
+  bootstrap.gd                # process entry: game / match runtime / bot / net probe
+  match_controller_3d.gd      # offline adapter: devices -> MatchSession -> view/HUD/audio
+  match/                      # the reusable match component
+    match_config.gd           #   immutable gameplay rules of one match (wire-serializable)
+    match_session.gd          #   clock, halves, goal freeze, slow-mo, events around the sim
+  server/                     # headless match runtime (WebSocket listener)
+  net/                        # network client side (connectivity probe so far)
   config/game_config.gd       # constants, enums, to_3d() coordinate helper
   data/                       # plain state: PlayerState, BallState, InputSnapshot, VfxParticle
   build/                      # one-shot scene construction
@@ -87,7 +98,45 @@ scripts/
     audio_manager.gd          #   music + SFX buses
 ```
 
-`scenes/main_3d.tscn` is the only scene; `project.godot` sets it as the main scene.
+`scenes/bootstrap.tscn` is the main scene; `scenes/main_3d.tscn` is the game,
+`scenes/server.tscn` the headless match runtime.
+
+### Tests
+
+```bash
+godot-4 --headless --path . --script res://tests/run_sim_tests.gd           # rules, config, session
+godot-4 --headless --path . --script res://tests/run_net_tests.gd           # runtime WebSocket listener
+godot-4 --headless --fixed-fps 60 --path . --script res://tests/run_scene_smoke.gd   # full offline match in the 3D scene
+```
+
+The same commands run in the pinned Docker toolchain (Git Bash shown):
+
+```bash
+docker build -f tools/godot/Dockerfile --target godot -t inazuma/godot:4.7.2 tools/godot
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/project" inazuma/godot:4.7.2 --headless --import --path /project
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/project" inazuma/godot:4.7.2 --headless --path /project --script res://tests/run_sim_tests.gd
+```
+
+On Linux/macOS use `$(pwd)` and drop `MSYS_NO_PATHCONV=1`. On Windows the container
+rewrites `assets/*.import` with LF line endings; `git checkout -- assets/` undoes that
+(the content is unchanged). Stage any intentional asset edits first, or that command
+discards them as well.
+
+---
+
+## Online play (in progress)
+
+The online version runs the match on an authoritative headless Godot **match runtime**
+and serves the web build through a **Caddy gateway**, deployed with Docker Compose. The
+full plan (lobby, results service, netcode) is being built in milestones.
+
+```bash
+docker compose up --build        # gateway on http://localhost:8080
+```
+
+- `http://localhost:8080/` loads the game in the browser (Compatibility renderer).
+- `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket path.
+- `tests/e2e/netprobe.mjs` runs that check in headless Chromium (see the file header).
 
 ---
 
