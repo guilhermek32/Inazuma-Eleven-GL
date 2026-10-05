@@ -62,15 +62,18 @@ func poll(now_ms: float = Time.get_ticks_msec()) -> void:
 	if status == Status.IDLE or status == Status.CLOSED:
 		return
 	_ws.poll()
-	match _ws.get_ready_state():
+	var state := _ws.get_ready_state()
+	if state == WebSocketPeer.STATE_OPEN and status == Status.CONNECTING:
+		_ws.send(NetProtocol.encode_hello(_token))
+		status = Status.AWAITING_WELCOME
+	# Drain in every state: a slow client can receive the final events, the
+	# ERROR and the close in one frame, and must still see those events.
+	while _ws.get_available_packet_count() > 0:
+		_on_packet(_ws.get_packet(), now_ms)
+		if status == Status.CLOSED:
+			return
+	match state:
 		WebSocketPeer.STATE_OPEN:
-			if status == Status.CONNECTING:
-				_ws.send(NetProtocol.encode_hello(_token))
-				status = Status.AWAITING_WELCOME
-			while _ws.get_available_packet_count() > 0:
-				_on_packet(_ws.get_packet(), now_ms)
-				if status == Status.CLOSED:
-					return
 			if status == Status.READY and now_ms - _last_ping_ms > PING_INTERVAL_MS:
 				_last_ping_ms = int(now_ms)
 				_ws.send(NetProtocol.encode_ping(now_ms))

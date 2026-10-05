@@ -92,6 +92,15 @@ func take_due_events(now_ms: float) -> Array[Dictionary]:
 		due.append(_events.pop_front().event)
 	return due
 
+## Every buffered event, due or not (oldest first). Used when the connection
+## closes, so final events such as match_over are shown even if a slow client
+## receives them in the same frame as the close.
+func take_all_events() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	while not _events.is_empty():
+		out.append(_events.pop_front().event)
+	return out
+
 ## Writes the interpolated state into a mirror MatchSimulation (one that is
 ## never stepped) so MatchView renders it unchanged. Returns the match-level
 ## values the HUD needs.

@@ -301,6 +301,11 @@ func _poll_online() -> void:
 		_dispatch_event(ev)
 
 func _on_net_closed(code: int, reason: String) -> void:
+	print("[online] connection closed (%d) %s" % [code, reason])
+	# Events that arrived before the close still play (a slow client can get
+	# match_over and the close in the same frame).
+	for ev in net.buffer.take_all_events():
+		_dispatch_event(ev)
 	# A finished match closes the connection after its final events: nothing to report.
 	if game_state != GameConfig.GameState.FULLTIME:
 		menu.set_fulltime_text("CONNECTION CLOSED\n%s\n(code %d)" % [reason if reason != "" else "connection lost", code])

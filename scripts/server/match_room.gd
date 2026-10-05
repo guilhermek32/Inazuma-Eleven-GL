@@ -30,7 +30,9 @@ const TICK_RATE := 60
 const SNAPSHOT_EVERY := 2
 const RECONNECT_GRACE_MS := 30000
 const WAITING_DEADLINE_MS := 300000
-const FINISHED_LINGER_TICKS := 90
+# Long enough for a stalled browser (software-rendered, a few fps) to read the
+# final events before the close: native WebSocketPeer drops unread packets on close.
+const FINISHED_LINGER_TICKS := 180
 # Session events that teleport players or the ball.
 const DISCONTINUOUS_EVENTS := ["field_reset", "restart", "half_time"]
 
