@@ -1,17 +1,33 @@
-# Online deployment. Milestone 0: gateway + match runtime.
-# Lobby, results, PostgreSQL and the optional ai-bot join in later milestones.
+# Online deployment: gateway + three business services + PostgreSQL.
 #
+#   cp .env.example .env               # then set real secrets
 #   docker compose up --build          # then open http://localhost:8080
-#   http://localhost:8080/?netprobe    # browser -> gateway -> runtime WebSocket check
+#
+# Services
+#   gateway        Caddy: TLS, the web build, and the only published ports.
+#                  /api/lobby/v1/* -> lobby, /api/stats/v1/* -> results,
+#                  /ws/game/*      -> match-runtime (player WebSocket)
+#   lobby          rooms, guest players, reservations, signed credentials
+#   match-runtime  authoritative headless Godot matches (8910 players,
+#                  8911 internal control API) + durable result spool
+#   results        match history and leaderboard
+#   postgres       infrastructure: separate lobby and results databases/roles
 #
 # Godot's web build only starts in a secure context: http://localhost works for
 # local play, but any other host needs HTTPS. Set SITE_ADDRESS to the public
 # domain (e.g. SITE_ADDRESS=game.example.com) and Caddy obtains a certificate.
 #
-# Only the gateway publishes a port; every other service sits on the internal
-# network, which has no route to the outside world.
+# Every service except the gateway sits only on the internal network, which
+# has no route to the outside world; internal APIs (runtime control, results
+# ingestion) are never routed by the gateway. DEV_NO_AUTH is never set here
+# (see docker-compose.dev.yml).
 
 name: inazuma-online
+
+x-secrets:
+  match-secret: &match-secret ${MATCH_SECRET:?set MATCH_SECRET in .env (see .env.example)}
+  control-token: &control-token ${RUNTIME_CONTROL_TOKEN:?set RUNTIME_CONTROL_TOKEN in .env (see .env.example)}
+  ingest-token: &ingest-token ${RESULTS_INGEST_TOKEN:?set RESULTS_INGEST_TOKEN in .env (see .env.example)}
 
 services:
   gateway:
@@ -30,6 +46,10 @@ services:
     depends_on:
       match-runtime:
         condition: service_healthy
+      lobby:
+        condition: service_healthy
+      results:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
       interval: 10s
@@ -44,9 +64,82 @@ services:
       target: match-runtime
     environment:
       MATCH_RUNTIME_PORT: "8910"
+      RUNTIME_CONTROL_PORT: "8911"
+      RUNTIME_DATA_DIR: /data
+      MATCH_SECRET: *match-secret
+      RUNTIME_CONTROL_TOKEN: *control-token
+      RESULTS_URL: http://results:8000
+      RESULTS_INGEST_TOKEN: *ingest-token
     volumes:
       - runtime-data:/data
     networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8911/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  lobby:
+    build:
+      context: services/lobby
+      target: service
+    environment:
+      DATABASE_URL: postgresql://lobby:${LOBBY_DB_PASSWORD:?set LOBBY_DB_PASSWORD in .env}@postgres:5432/lobby
+      MATCH_SECRET: *match-secret
+      RUNTIME_CONTROL_URL: http://match-runtime:8911
+      RUNTIME_CONTROL_TOKEN: *control-token
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      match-runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  results:
+    build:
+      context: services/results
+      target: service
+    environment:
+      DATABASE_URL: postgresql://results:${RESULTS_DB_PASSWORD:?set RESULTS_DB_PASSWORD in .env}@postgres:5432/results
+      RESULTS_INGEST_TOKEN: *ingest-token
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      LOBBY_DB_PASSWORD: ${LOBBY_DB_PASSWORD:?set LOBBY_DB_PASSWORD in .env}
+      RESULTS_DB_PASSWORD: ${RESULTS_DB_PASSWORD:?set RESULTS_DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./services/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [internal]
+    healthcheck:
+      # TCP, not the socket: the init-time server only listens on the socket.
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 10
     restart: unless-stopped
 
 networks:
@@ -57,3 +150,4 @@ networks:
 volumes:
   caddy-data: {}
   runtime-data: {}
+  postgres-data: {}

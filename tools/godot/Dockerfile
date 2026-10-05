@@ -59,19 +59,21 @@ RUN mkdir -p build/server \
  && test -x build/server/inazuma_server.x86_64
 
 # Headless match runtime (also hosts the AI bot entry point, selected by --bot).
+# 8910: player WebSocket; 8911: internal control API (GET /health is the
+# healthcheck); /data: terminal registry + result spool (a volume).
 FROM debian:bookworm-slim AS match-runtime
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home app \
  && mkdir -p /data && chown app /data
 COPY --from=export-server /project/build/server /app
 USER app
 WORKDIR /app
-ENV MATCH_RUNTIME_PORT=8910
-EXPOSE 8910
+ENV MATCH_RUNTIME_PORT=8910 RUNTIME_CONTROL_PORT=8911 RUNTIME_DATA_DIR=/data
+EXPOSE 8910 8911
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
-  CMD bash -c '</dev/tcp/127.0.0.1/8910' || exit 1
+  CMD curl -fsS -o /dev/null http://127.0.0.1:8911/health || exit 1
 ENTRYPOINT ["/app/inazuma_server.x86_64", "--headless"]
 
 # Public entry point: TLS, the web client and the reverse proxy to the services.
@@ -83,8 +85,8 @@ COPY --from=export-web /project/build/web /srv/web
 # so DEV_NO_AUTH=1 "dev:<team>" tokens work (see docker-compose.dev.yml).
 # Never used by the production compose file.
 FROM project AS match-runtime-dev
-ENV MATCH_RUNTIME_PORT=8910
-EXPOSE 8910
+ENV MATCH_RUNTIME_PORT=8910 RUNTIME_CONTROL_PORT=8911 RUNTIME_DATA_DIR=/data
+EXPOSE 8910 8911
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-  CMD bash -c '</dev/tcp/127.0.0.1/8910' || exit 1
+  CMD curl -fsS -o /dev/null http://127.0.0.1:8911/health || exit 1
 ENTRYPOINT ["godot", "--headless", "--path", "/project", "--", "--server"]

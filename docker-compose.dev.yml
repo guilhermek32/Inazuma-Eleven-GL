@@ -1,6 +1,7 @@
-# Development override: a debug match runtime that accepts "dev:<team>" tokens
-# and creates rooms on first use, for testing online play before the lobby
-# exists. Never deploy this.
+# Development override: a debug match runtime that also accepts
+# "dev:<team>" tokens and creates rooms on first use, for testing online play
+# without going through the lobby. Lobby-issued credentials keep working.
+# Never deploy this. Needs the same .env as the main file.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 #   then open, in two browser windows:

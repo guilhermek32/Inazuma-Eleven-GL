@@ -6,6 +6,9 @@
 #
 # Routes
 #   /ws/game/<match_id>  WebSocket upgrade, proxied to the match runtime
+#   /api/lobby/v1/*      lobby public API (prefix /api/lobby stripped)
+#   /api/stats/v1/*      results public reads (prefix /api/stats stripped)
+#   /api/*               404: internal APIs are never routed
 #   /healthz             gateway liveness
 #   everything else      the Godot web export (static files)
 #
@@ -40,6 +43,23 @@
 
 	handle /ws/game/* {
 		reverse_proxy match-runtime:8910
+	}
+
+	handle /api/lobby/v1/* {
+		uri strip_prefix /api/lobby
+		reverse_proxy lobby:8000
+	}
+
+	handle /api/stats/v1/* {
+		uri strip_prefix /api/stats
+		reverse_proxy results:8000
+	}
+
+	# Nothing else under /api is public: the runtime control API and the
+	# results ingestion endpoint stay on the internal network.
+	handle /api/* {
+		header Content-Type application/json
+		respond `{"error":"not_found"}` 404
 	}
 
 	handle {
