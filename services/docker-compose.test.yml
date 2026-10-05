@@ -1,0 +1,48 @@
+# Service test suites against a throwaway PostgreSQL (tmpfs, removed by down -v).
+#
+#   docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
+#   docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+#   docker compose -f services/docker-compose.test.yml down -v
+#
+# Each suite creates and drops its own database on the test server; the
+# service sources are mounted, so edits don't need a rebuild.
+
+name: inazuma-service-tests
+
+services:
+  test-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: test
+    tmpfs: /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  lobby-tests:
+    build:
+      context: ./lobby
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql://postgres:test@test-db:5432/postgres
+      TOKEN_VECTORS: /vectors/token_vectors.json
+    volumes:
+      - ./lobby:/app
+      - ../tests/vectors:/vectors:ro
+    depends_on:
+      test-db:
+        condition: service_healthy
+
+  results-tests:
+    build:
+      context: ./results
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql://postgres:test@test-db:5432/postgres
+    volumes:
+      - ./results:/app
+    depends_on:
+      test-db:
+        condition: service_healthy
