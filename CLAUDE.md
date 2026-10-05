@@ -13,7 +13,7 @@ This repo contains two implementations of the same arcade 11v11 football game, s
 
 There are headless test suites (`tests/run_sim_tests.gd`, `tests/run_net_tests.gd`, `tests/run_scene_smoke.gd`, see Commands); no linter.
 
-The game is being turned into an online two-player system: lobby, match runtime and results services behind a Caddy gateway, deployed with Docker Compose. Milestones 0–1 are done: the reusable `MatchSession` component and the bootstrap/runtime/export spike. Review notes: `MICROSERVICES_PLAN_REVIEW.md`.
+The game is being turned into an online two-player system: lobby, match runtime and results services behind a Caddy gateway, deployed with Docker Compose. Milestones 0–2 are done: the reusable `MatchSession` component, the bootstrap/runtime/export spike, and the online vertical slice (protocol, authoritative rooms, interpolating client). Rooms are still created from development tokens; the lobby, signed tokens and results service are Milestone 3. Review notes: `MICROSERVICES_PLAN_REVIEW.md`.
 
 ## Commands
 
@@ -32,7 +32,8 @@ godot-4 --path .                                          # run interactively
 godot-4 --headless --quit-after 5 --path .                # smoke-test: boots the scene, prints "Inazuma Eleven 3D environment ready"
 godot-4 --headless --import --path .                      # full import + script compile (run after adding a class_name script)
 godot-4 --headless --path . --script res://tests/run_sim_tests.gd   # rules/config/session tests (no 3D); exits non-zero on failure
-godot-4 --headless --path . --script res://tests/run_net_tests.gd   # match-runtime WebSocket tests over loopback
+godot-4 --headless --path . --script res://tests/run_net_tests.gd   # protocol, input queue, interpolation, runtime/rooms over loopback
+godot-4 --headless --path . --script res://tests/run_online_smoke.gd   # runtime + two 3D games playing online in one process
 godot-4 --headless --fixed-fps 60 --path . --script res://tests/run_scene_smoke.gd   # full offline AI match through the 3D controller
 godot-4 --headless --path . -- --server                   # run the headless match runtime (port 8910)
 ```
@@ -43,7 +44,10 @@ Docker toolchain (`tools/godot/Dockerfile`, official binaries verified by SHA-51
 docker build -f tools/godot/Dockerfile --target godot -t inazuma/godot:4.7.2 tools/godot
 MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/project" inazuma/godot:4.7.2 --headless --path /project --script res://tests/run_sim_tests.gd
 docker compose up --build                                 # gateway + match runtime; http://localhost:8080 (?netprobe checks the WebSocket path)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build   # debug runtime accepting dev tokens: two windows at /?match=x&token=dev:0 and dev:1
 ```
+
+Online play without the lobby: desktop `godot-4 --path . -- --connect=ws://127.0.0.1:8910/ws/game/<id> --token=dev:<team>` against a runtime started with `DEV_NO_AUTH=1` (debug builds only; the release server never accepts dev tokens). Browser e2e tests in `tests/e2e/` (`netprobe.mjs`, `two_players.mjs`) run in the Playwright image inside the gateway's network namespace — see their headers.
 
 Running Godot in the Linux container rewrites `assets/*.import` with LF endings (content unchanged); `git checkout -- assets/` restores them from the index — **stage intentional asset edits first**, or that command discards them too. The built-in browser pane only advances Godot web frames while visible, so verify the web build with `tests/e2e/netprobe.mjs` (headless Chromium in the Playwright image).
 
@@ -51,7 +55,7 @@ Running Godot in the Linux container rewrites `assets/*.import` with LF endings 
 
 **Process roles.** `scenes/bootstrap.tscn` (`scripts/bootstrap.gd`) is the main scene and dispatches by role:
 - `-- --bot` loads `scenes/bot.tscn` (not built yet).
-- `-- --server`, or a `dedicated_server` export, loads `scenes/server.tscn`: the headless `MatchRuntime` WebSocket listener in `scripts/server/`.
+- `-- --server`, or a `dedicated_server` export, loads `scenes/server.tscn`: the headless match runtime in `scripts/server/`.
 - `?netprobe` on the web loads `scenes/net_probe.tscn`.
 - Otherwise it loads `scenes/main_3d.tscn`, the game.
 
@@ -64,6 +68,15 @@ Code is organized by responsibility under `scripts/`:
 - `match/` — the reusable match component, shared by the offline controller and the online runtime:
   - `MatchConfig` holds the immutable gameplay rules of one match: half length, formations, kit palette indices, per-team AI difficulty profile, fouls/offside and weather. `to_dict`/`from_dict` give a validated wire form.
   - `MatchSession` owns `MatchSimulation` + `AIController`. API: `initialize(config, seed)`, `submit_input`, `step(real_dt)`, `read_state`, `drain_events`. It owns the match clock, halves, goal freeze, half-time pause and the per-session slow-motion `time_scale`.
+- `net/` — client side of the wire protocol:
+  - `NetProtocol` defines protocol v1: binary, little-endian and quantized, with HELLO/WELCOME/INPUT/SNAPSHOT/EVENT/PING/PONG/ERROR messages. Its decoders reject anything malformed.
+  - `NetClient` connects and sends HELLO, then turns local `InputSnapshot` edges into numbered actions.
+  - `SnapshotBuffer` renders about 100 ms behind the server. It interpolates continuous fields, snaps across state epochs, releases events at their tick, and `apply_to()` writes into a never-stepped mirror `MatchSimulation`.
+- `server/` — the authoritative runtime:
+  - `MatchRuntime` is the WebSocket listener. It enforces handshake/HELLO deadlines, size and connection limits and backpressure, authenticates HELLO, and ticks rooms in `_physics_process`.
+  - `MatchRoom` runs one match. Its states are WAITING → RUNNING ⇄ PAUSED (30 s reconnect grace, then forfeit) → FINISHED. It sends snapshots every 2 ticks, and resets bump `state_epoch` and are flagged as discontinuities.
+  - `RemoteInputQueue` sets the server-side input semantics: one action per kind per tick, strict id order, the shot charge measured by the server, neutral input after 250 ms of silence, and a reset on reconnect.
+- The controller's *online adapter* (`start_online`, `--connect=`/`--token=` launch args or web `?match=&token=`) mirrors the runtime's match: it sends input, applies interpolated snapshots to `session.sim`, and dispatches runtime events through the same `_dispatch_event` as offline.
 - `config/game_config.gd` (`GameConfig`) — field geometry constants, GLB/animation constants, the `PlayerRole` and `GameState` enums, `MATCH_LENGTHS`, and the `to_3d()` coordinate helper. Shared by every module as `GameConfig.X`.
 - `data/` — plain state classes: `PlayerState`, `BallState`, `InputSnapshot`, `TeamState` (players + device/formation/kit + human selection state; `sim.teams[0]`=red, `[1]`=blue).
 - `build/` — one-shot scene construction: `MaterialFactory` (materials + procedural textures, including the grass, crowd and ball-trail decal textures), `PitchBuilder` (pitch, lines, goals), `StadiumBuilder` (night environment + post-processing — ACES, glow, SSAO, SSIL, volumetric fog; broadcast camera; moon fill + four corner floodlight masts; VoxelGI bake; stands; the animated 3D MultiMesh crowd; hoardings), `PlayerFactory` (GLB load, animation library, player visuals, team tint).

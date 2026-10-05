@@ -78,3 +78,13 @@ ENTRYPOINT ["/app/inazuma_server.x86_64", "--headless"]
 FROM caddy:2.10-alpine AS gateway
 COPY services/gateway/Caddyfile /etc/caddy/Caddyfile
 COPY --from=export-web /project/build/web /srv/web
+
+# Development runtime: the debug editor binary serving the imported project,
+# so DEV_NO_AUTH=1 "dev:<team>" tokens work (see docker-compose.dev.yml).
+# Never used by the production compose file.
+FROM project AS match-runtime-dev
+ENV MATCH_RUNTIME_PORT=8910
+EXPOSE 8910
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+  CMD bash -c '</dev/tcp/127.0.0.1/8910' || exit 1
+ENTRYPOINT ["godot", "--headless", "--path", "/project", "--", "--server"]

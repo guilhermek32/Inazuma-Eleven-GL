@@ -1,0 +1,15 @@
+# Development override: a debug match runtime that accepts "dev:<team>" tokens
+# and creates rooms on first use, for testing online play before the lobby
+# exists. Never deploy this.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#   then open, in two browser windows:
+#     http://localhost:8080/?match=test1&token=dev:0
+#     http://localhost:8080/?match=test1&token=dev:1
+
+services:
+  match-runtime:
+    build:
+      target: match-runtime-dev
+    environment:
+      DEV_NO_AUTH: "1"

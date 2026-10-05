@@ -13,7 +13,8 @@ enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME, MATCH_SETUP }
 
 # Device codes for per-team input assignment (see MatchSetup / InputReader).
 # A pad device id (>= 0, as returned by Input.get_connected_joypads) means that
-# gamepad drives the team; these two negatives are the special cases.
+# gamepad drives the team; the negatives are the special cases.
+const DEVICE_REMOTE := -3  # a human over the network (the input arrives via the match runtime)
 const DEVICE_AI := -2    # no human assigned — the team runs on the AI
 const DEVICE_KBM := -1   # keyboard + mouse drives the team
 

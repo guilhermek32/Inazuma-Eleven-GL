@@ -77,8 +77,8 @@ scripts/
   match/                      # the reusable match component
     match_config.gd           #   immutable gameplay rules of one match (wire-serializable)
     match_session.gd          #   clock, halves, goal freeze, slow-mo, events around the sim
-  server/                     # headless match runtime (WebSocket listener)
-  net/                        # network client side (connectivity probe so far)
+  server/                     # headless match runtime: listener, rooms, remote input queue
+  net/                        # wire protocol, network client, snapshot interpolation
   config/game_config.gd       # constants, enums, to_3d() coordinate helper
   data/                       # plain state: PlayerState, BallState, InputSnapshot, VfxParticle
   build/                      # one-shot scene construction
@@ -137,6 +137,17 @@ docker compose up --build        # gateway on http://localhost:8080
 - `http://localhost:8080/` loads the game in the browser (Compatibility renderer).
 - `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket path.
 - `tests/e2e/netprobe.mjs` runs that check in headless Chromium (see the file header).
+
+Until the lobby exists (next milestone), two players can try online play with the
+development stack, whose debug runtime accepts development tokens:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Then open `http://localhost:8080/?match=test1&token=dev:0` (red) and
+`http://localhost:8080/?match=test1&token=dev:1` (blue) in two browser windows.
+`tests/e2e/two_players.mjs` automates this check.
 
 ---
 

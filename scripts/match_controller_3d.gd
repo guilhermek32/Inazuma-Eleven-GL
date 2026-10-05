@@ -47,6 +47,12 @@ var _lineup_devices: Array[int] = [GameConfig.DEVICE_KBM, GameConfig.DEVICE_AI]
 var _lineup_formations: Array[int] = [GameConfig.DEFAULT_FORMATION, GameConfig.DEFAULT_FORMATION]
 var _lineup_kits: Array[Dictionary] = [GameConfig.DEFAULT_KIT_A.duplicate(), GameConfig.DEFAULT_KIT_B.duplicate()]
 
+# Online mode (the *online adapter*): the match runs on the match runtime;
+# `session` then only holds a mirror of its state, filled from interpolated
+# snapshots and never stepped. null while playing offline.
+var net: NetClient
+var _online_state := {}
+
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
 	material_factory.build_materials()
@@ -120,6 +126,7 @@ func _ready() -> void:
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
 	_set_game_state(GameConfig.GameState.MENU)
 	print("Inazuma Eleven 3D environment ready")
+	_start_online_from_launch_args()
 
 func _exit_tree() -> void:
 	session.dispose()
@@ -130,21 +137,39 @@ func _physics_process(delta: float) -> void:
 	if game_state != GameConfig.GameState.PLAYING:
 		return
 	input_reader.read(sim.teams, sim.restart_timer)
+	if net != null:
+		# Online: the runtime simulates; we only send our team's input.
+		net.send_input(sim.teams[net.team].input)
+		return
 	session.step(delta)
-	_dispatch_events()
+	for ev in session.drain_events():
+		_dispatch_event(ev)
 
 func _process(delta: float) -> void:
+	if net != null:
+		_poll_online()
+	var st := _hud_state()
 	# The match's slow motion slows its 3D visuals; HUD/menus keep real time.
-	var visual_delta := delta * session.time_scale
+	var time_scale: float = st.time_scale
+	var visual_delta := delta * time_scale
 	if game_state == GameConfig.GameState.PLAYING:
-		view.set_glb_animation_speed(session.time_scale)
+		view.set_glb_animation_speed(time_scale)
 		view.update_visuals(visual_delta)
 	elif game_state == GameConfig.GameState.MATCH_SETUP:
 		setup.update(delta)
 	view.update_confetti(visual_delta)
-	var st := session.read_state()
 	hud.update(st.score_left, st.score_right, game_state, st.restart_timer, st.restart_type, st.half_length_s, st.match_time, st.current_half, delta)
 	hud.update_stamina(_selected_stamina())
+
+## Match-level values for the HUD: the local session offline, the latest
+## interpolated snapshot online.
+func _hud_state() -> Dictionary:
+	if net == null:
+		return session.read_state()
+	if _online_state.is_empty():
+		return {"score_left": 0, "score_right": 0, "restart_timer": 0.0, "restart_type": 0,
+				"half_length_s": session.config.half_length_s, "match_time": 0.0, "current_half": 1, "time_scale": 1.0}
+	return _online_state
 
 ## Sprint stamina of each human team's selected player (-1 hides that bar).
 func _selected_stamina() -> Array:
@@ -157,38 +182,139 @@ func _selected_stamina() -> Array:
 			values[t] = ts.players[ts.selected_index].stamina
 	return values
 
-## Presentation adapter: turns the session's gameplay events into view, HUD
-## and audio cues. The session never touches presentation directly.
-func _dispatch_events() -> void:
-	for ev in session.drain_events():
-		match ev.type:
-			"goal":
-				_on_goal(ev)
-			"kick":
-				audio.play_kick()
-			"special":
-				hud.show_banner("%s!" % ev.name, ev.color, 1.1, false)
-				audio.play_special()
-			"field_reset":
-				view.reset_trail()
-			"restart":
-				_on_restart_awarded(ev.restart_type, ev.team)
-			"foul":
-				# Fouls/offside show their own banner; the FREE_KICK restart that follows is
-				# deliberately absent from _on_restart_awarded's labels so they don't double-fire
-				# (the restart still shows as "Free kick" in the HUD timer text).
-				hud.show_banner("FOUL!", Color(1.0, 0.85, 0.3), 0.9, false)
-				audio.play_whistle()
-			"offside":
-				hud.show_banner("OFFSIDE", Color(1.0, 0.55, 0.2), 0.9, false)
-				audio.play_whistle()
-			"player_action":
-				sim.teams[ev.team].players[ev.index].play_action(ev.action, ev.duration)
-			"half_time":
-				audio.play_whistle()
-				hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
-			"full_time":
-				_end_match(ev)
+## Presentation adapter: turns one gameplay event (from the local session, or
+## from the runtime online) into view, HUD and audio cues. The rules never
+## touch presentation directly.
+func _dispatch_event(ev: Dictionary) -> void:
+	match ev.type:
+		"goal":
+			_on_goal(ev)
+		"kick":
+			audio.play_kick()
+		"special":
+			hud.show_banner("%s!" % ev.name, ev.color, 1.1, false)
+			audio.play_special()
+		"field_reset":
+			view.reset_trail()
+		"restart":
+			_on_restart_awarded(ev.restart_type, ev.team)
+		"foul":
+			# Fouls/offside show their own banner; the FREE_KICK restart that follows is
+			# deliberately absent from _on_restart_awarded's labels so they don't double-fire
+			# (the restart still shows as "Free kick" in the HUD timer text).
+			hud.show_banner("FOUL!", Color(1.0, 0.85, 0.3), 0.9, false)
+			audio.play_whistle()
+		"offside":
+			hud.show_banner("OFFSIDE", Color(1.0, 0.55, 0.2), 0.9, false)
+			audio.play_whistle()
+		"player_action":
+			var players := sim.teams[ev.team].players
+			if ev.index >= 0 and ev.index < players.size():
+				players[ev.index].play_action(ev.action, ev.duration)
+		"half_time":
+			audio.play_whistle()
+			hud.show_banner("HALF TIME", Color(1.0, 0.95, 0.55), 2.0)
+		"full_time", "match_over":
+			_end_match(ev)
+		# Online-only room events.
+		"kickoff":
+			print("[online] kickoff")
+			audio.play_whistle()
+			hud.show_banner("KICK OFF", Color(1.0, 0.95, 0.55), 1.2)
+		"paused":
+			print("[online] paused (team %d disconnected)" % ev.team)
+			var who := "YOU" if ev.team == net_team() else "OPPONENT"
+			hud.show_banner("%s DISCONNECTED - WAITING %ds" % [who, int(ev.grace_s)], Color(1.0, 0.55, 0.2), float(ev.grace_s), false)
+		"resumed":
+			print("[online] resumed")
+			hud.show_banner("RESUMED", Color(0.5, 1.0, 0.6), 1.0, false)
+
+# --- online adapter -----------------------------------------------------------------
+
+## Starts online play when the process was launched for it:
+##   desktop:  godot-4 --path . -- --connect=ws://host:8910/ws/game/<id> --token=<credential>
+##   web:      https://<gateway>/?match=<id>&token=<credential>   (same-origin WebSocket)
+## The lobby flow (Milestone 3-4) will call start_online() itself.
+func _start_online_from_launch_args() -> void:
+	var url := ""
+	var token := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--connect="):
+			url = arg.substr(10)
+		elif arg.begins_with("--token="):
+			token = arg.substr(8)
+	if OS.has_feature("web"):
+		var match_id := str(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('match') || ''", true))
+		token = str(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('token') || ''", true))
+		if match_id != "":
+			var proto := str(JavaScriptBridge.eval("window.location.protocol", true))
+			var host := str(JavaScriptBridge.eval("window.location.host", true))
+			url = "%s//%s/ws/game/%s" % ["wss:" if proto == "https:" else "ws:", host, match_id.uri_encode()]
+	if url != "" and token != "":
+		# Let the scene render (and compile its shaders) before the socket opens,
+		# so the first heavy frames don't eat into the runtime's HELLO deadline.
+		for i in 3:
+			await get_tree().process_frame
+		start_online(url, token)
+
+func start_online(url: String, token: String) -> void:
+	if net != null:
+		_leave_online()
+	net = NetClient.new()
+	net.welcomed.connect(_on_net_welcome)
+	net.closed.connect(_on_net_closed)
+	if net.connect_to(url, token) != OK:
+		_on_net_closed(0, "could not connect")
+		return
+	hud.show_banner("CONNECTING...", Color(0.8, 0.9, 1.0), 10.0, false)
+
+func net_team() -> int:
+	return net.team if net != null else -1
+
+## WELCOME: build the mirror match from the runtime's MatchConfig so rosters,
+## kits and rules match, then show it while waiting for kickoff.
+func _on_net_welcome() -> void:
+	print("[online] joined match %s as team %d" % [net.match_id, net.team])
+	for t in 2:
+		session.set_team_device(t, GameConfig.DEVICE_KBM if t == net.team else GameConfig.DEVICE_REMOTE)
+	session.initialize(net.config, 0)
+	session.drain_events()
+	_online_state = {}
+	view.clear_confetti()
+	_rebuild_player_visuals()
+	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
+	hud.reset()
+	_set_game_state(GameConfig.GameState.PLAYING)
+	_apply_weather()
+	hud.show_banner("WAITING FOR OPPONENT", Color(0.8, 0.9, 1.0), 600.0, false)
+
+func _poll_online() -> void:
+	net.poll()
+	if net == null:
+		return
+	var now := float(Time.get_ticks_msec())
+	var s := net.buffer.sample(now)
+	if not s.is_empty() and net.config != null:
+		_online_state = SnapshotBuffer.apply_to(sim, s.a, s.b, s.t)
+		_online_state["half_length_s"] = net.config.half_length_s
+	for ev in net.buffer.take_due_events(now):
+		_dispatch_event(ev)
+
+func _on_net_closed(code: int, reason: String) -> void:
+	# A finished match closes the connection after its final events: nothing to report.
+	if game_state != GameConfig.GameState.FULLTIME:
+		menu.set_fulltime_text("CONNECTION CLOSED\n%s\n(code %d)" % [reason if reason != "" else "connection lost", code])
+		_set_game_state(GameConfig.GameState.FULLTIME)
+	_leave_online.call_deferred()
+
+func _leave_online() -> void:
+	if net == null:
+		return
+	net.close()
+	net = null
+	_online_state = {}
+	for t in 2:
+		session.set_team_device(t, _lineup_devices[t])
 
 func _on_restart_awarded(type: int, team: int) -> void:
 	var labels := {
@@ -215,7 +341,8 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		match game_state:
 			GameConfig.GameState.PLAYING:
-				_set_game_state(GameConfig.GameState.PAUSED)
+				# An online match can't be paused locally; Esc leaves it.
+				_set_game_state(GameConfig.GameState.MENU if net != null else GameConfig.GameState.PAUSED)
 			GameConfig.GameState.PAUSED:
 				_set_game_state(GameConfig.GameState.PLAYING)
 			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
@@ -232,6 +359,8 @@ func _set_game_state(next: int) -> void:
 	# Never leave the world in slow-mo when we step out of live play (pause, menus, …).
 	if next != GameConfig.GameState.PLAYING:
 		session.cancel_slow_motion()
+	if next == GameConfig.GameState.MENU and net != null:
+		_leave_online()
 	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
 	var leaving_setup := game_state == GameConfig.GameState.MATCH_SETUP and next != GameConfig.GameState.MATCH_SETUP
@@ -251,6 +380,9 @@ func set_match_lineup(devices: Array[int], formations: Array[int], kits: Array[D
 	_lineup_kits = kits.duplicate(true)
 
 func _start_match() -> void:
+	# Restart / Rematch after an online match plays an offline one (a new
+	# online match goes through the lobby).
+	_leave_online()
 	view.clear_confetti()
 	_initialize_session()
 	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
@@ -297,14 +429,27 @@ func _rebuild_player_visuals() -> void:
 	view.refresh_animation_speed()
 
 func _end_match(ev: Dictionary) -> void:
+	if net != null:
+		print("[online] match over (%s) %d-%d" % [ev.get("reason", "full_time"), ev.score_left, ev.score_right])
 	audio.play_whistle()
 	var result := "DRAW"
 	if ev.score_left > ev.score_right:
 		result = "TIME A WINS"
 	elif ev.score_right > ev.score_left:
 		result = "TIME B WINS"
-	menu.set_fulltime_text("FULL TIME\n%d - %d\n%s" % [ev.score_left, ev.score_right, result])
-	menu.set_fulltime_stats(ev.stats, sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
+	# Online matches can also end early ("match_over" carries the reason).
+	var title := "FULL TIME"
+	match str(ev.get("reason", "full_time")):
+		"forfeit":
+			title = "FORFEIT"
+			result = "TIME A WINS" if ev.winner == 0 else ("TIME B WINS" if ev.winner == 1 else "NO WINNER")
+		"cancelled":
+			title = "MATCH CANCELLED"
+	menu.set_fulltime_text("%s\n%d - %d\n%s" % [title, ev.score_left, ev.score_right, result])
+	# Online stats arrive as plain JSON arrays; the menu wants Array[Dictionary].
+	var stats: Array[Dictionary] = []
+	stats.assign(ev.stats)
+	menu.set_fulltime_stats(stats, sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
 	_set_game_state(GameConfig.GameState.FULLTIME)
 
 ## Shows rain + a wet pitch. During a match this follows the match's own
