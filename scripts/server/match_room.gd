@@ -18,6 +18,11 @@ extends RefCounted
 ## The room never touches sockets: it talks to the runtime through the two
 ## Callables it is given, send(peer_id, bytes, droppable) and
 ## close(peer_id, code, reason).
+##
+## A *provisioned* room (created by the lobby through the runtime's control
+## API) also carries its credential expiry and the two team reservations
+## {reservation_id, player_id, nickname}; HELLO credentials must match them.
+## Development rooms (dev tokens, created on first use) have neither.
 
 enum State { WAITING, RUNNING, PAUSED, FINISHED }
 
@@ -40,6 +45,15 @@ var state := State.WAITING
 var tick := 0
 var state_epoch := 0
 var result := {}
+# Provisioning (see the header); unix seconds for the timestamps.
+var provisioned := false
+var expires_at := 0
+var reservations: Array[Dictionary] = [{}, {}]
+var created_unix := 0
+var started_unix := 0
+var finished_unix := 0
+# Set by the runtime once the terminal state and result are durably recorded.
+var recorded := false
 # Per team: {peer: int (-1 = empty), epoch: int, queue: RemoteInputQueue}
 var slots: Array[Dictionary] = []
 
@@ -57,6 +71,7 @@ func _init(p_match_id: String, p_config: MatchConfig, seed_value: int, send: Cal
 	_send = send
 	_close = close
 	_created_ms = Time.get_ticks_msec()
+	created_unix = int(Time.get_unix_time_from_system())
 	session = MatchSession.new()
 	for t in 2:
 		session.set_team_device(t, GameConfig.DEVICE_REMOTE)
@@ -92,6 +107,7 @@ func attach(team: int, peer_id: int) -> int:
 	if is_attached(0) and is_attached(1):
 		if state == State.WAITING:
 			state = State.RUNNING
+			started_unix = int(Time.get_unix_time_from_system())
 			_broadcast_event({"type": "kickoff"})
 		elif state == State.PAUSED:
 			state = State.RUNNING
@@ -115,6 +131,13 @@ func on_input(peer_id: int, frame: Dictionary) -> void:
 	var team := team_of(peer_id)
 	if team >= 0 and state != State.FINISHED:
 		(slots[team].queue as RemoteInputQueue).push(frame, tick)
+
+## Cancels a match that hasn't kicked off. Returns false once it has.
+func cancel() -> bool:
+	if state != State.WAITING:
+		return false
+	_finish("cancelled", -1)
+	return true
 
 func is_done() -> bool:
 	return state == State.FINISHED and _finished_ticks > FINISHED_LINGER_TICKS
@@ -157,6 +180,7 @@ func _finish(reason: String, winner: int) -> void:
 	if state == State.FINISHED:
 		return
 	state = State.FINISHED
+	finished_unix = int(Time.get_unix_time_from_system())
 	session.cancel_slow_motion()
 	result = {"match_id": match_id, "reason": reason, "winner": winner,
 			"score_left": session.sim.score_left, "score_right": session.sim.score_right,

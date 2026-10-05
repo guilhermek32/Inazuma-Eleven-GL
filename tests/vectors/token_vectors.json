@@ -1,0 +1,154 @@
+{
+  "description": "Match credential v1 interoperability vectors (see services/lobby/app/credentials.py and scripts/net/match_token.gd). Key = UTF-8 bytes of 'secret'; verify with now = 'now' and audience = 'audience'.",
+  "secret": "inazuma-shared-test-secret-0123456789",
+  "now": 1790000000,
+  "audience": "match-ws",
+  "valid": [
+    {
+      "name": "uuid claims, team 1",
+      "claims": {
+        "v": 1,
+        "match_id": "5b0c7f7e-8f8a-4c1e-9a55-2f0d6c1e7a10",
+        "reservation_id": "0e7c2b1a-6d4f-4b6a-8c3e-9f1a2b3c4d5e",
+        "team": 1,
+        "player_id": "a3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+        "aud": "match-ws",
+        "exp": 1790003600
+      },
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg"
+    },
+    {
+      "name": "short ids, team 0, expires next second",
+      "claims": {
+        "v": 1,
+        "match_id": "m-1",
+        "reservation_id": "r-0",
+        "team": 0,
+        "player_id": "p-0",
+        "aud": "match-ws",
+        "exp": 1790000001
+      },
+      "token": "AQNtLTEDci0wAANwLTAIbWF0Y2gtd3OBO7FqAAAAAA.pPAt4b61kxEGlgwZXLMM1RJooT3xC5W39pTvq4bGL20"
+    },
+    {
+      "name": "non-ASCII ids, far-future exp",
+      "claims": {
+        "v": 1,
+        "match_id": "sala-ação",
+        "reservation_id": "r",
+        "team": 0,
+        "player_id": "jogador-ü",
+        "aud": "match-ws",
+        "exp": 4102444800
+      },
+      "token": "AQtzYWxhLWHDp8OjbwFyAApqb2dhZG9yLcO8CG1hdGNoLXdzAFeG9AAAAAA.p2GWutnwfqt-D0l9R_CaoC0DVE0nXO4b7SSSYzNbEHE"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "expired: now == exp",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OAO7FqAAAAAA.ZkTJoJA5Vs82GMDDEiGdpToja9kLhm0jiqR-Qc9PSTM",
+      "error": "expired"
+    },
+    {
+      "name": "expired: exp in the past",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3NEO7FqAAAAAA.zOKEj7yZBw8pxE4rlTRRM0UsxtQPqJeXTzccoYQz6Qs",
+      "error": "expired"
+    },
+    {
+      "name": "wrong audience",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQFbG9iYnmQSbFqAAAAAA.ijYbmIm_ZDazrXNVaVMmWySq1O5HZeJ2CaWqnnN7ihg",
+      "error": "wrong_audience"
+    },
+    {
+      "name": "signed with another secret",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.hBiiff4SI_UPEUmwM7aFVwAW8l_WMycy1qo9W60O7sU",
+      "error": "bad_signature"
+    },
+    {
+      "name": "payload tampered after signing",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3KQSbFqAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg",
+      "error": "bad_signature"
+    },
+    {
+      "name": "signature truncated",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0",
+      "error": "bad_signature"
+    },
+    {
+      "name": "signature of another token",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.pPAt4b61kxEGlgwZXLMM1RJooT3xC5W39pTvq4bGL20",
+      "error": "bad_signature"
+    },
+    {
+      "name": "unsupported version (re-signed)",
+      "token": "AiQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.s6GkTg1wSDRVR3mCqhGJs-KX7q5k5MrL60LPwk6NBSo",
+      "error": "unsupported_version"
+    },
+    {
+      "name": "team 2 (re-signed)",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlAiRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.J8laUQkSF0m-q3eTU4VKIEtVek--0ucyPptkGup3tog",
+      "error": "malformed"
+    },
+    {
+      "name": "trailing byte (re-signed)",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAAA.ioHKKeKDkoEzTv-b-DdK1crXZwJoMjWMr5DPerSfdiQ",
+      "error": "malformed"
+    },
+    {
+      "name": "truncated payload (re-signed)",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAA.DWYLUqYQEY3PxeoC3kAxeiyt0lXqGuhWVnc5xzh2hhw",
+      "error": "malformed"
+    },
+    {
+      "name": "exp >= 2^63 (re-signed)",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3MAAAAAAAAAgA.XuEA9Bt1ppnnmt37-XuqBVMTOn_6JFSa_eENKBNGoJA",
+      "error": "malformed"
+    },
+    {
+      "name": "empty match_id (re-signed)",
+      "token": "AQAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.jNk27ysPDUFlZJxG9PLbBA0yz-Ncuww21hKrPIQoukg",
+      "error": "malformed"
+    },
+    {
+      "name": "invalid UTF-8 match_id (re-signed)",
+      "token": "AST_YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.-ZKXYL28pJ2dCOQYVZ1TT7Yce4WHv1iWYEx-scAPnPY",
+      "error": "malformed"
+    },
+    {
+      "name": "no separator",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg",
+      "error": "malformed"
+    },
+    {
+      "name": "three parts",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg.AAAA",
+      "error": "malformed"
+    },
+    {
+      "name": "standard base64 alphabet character",
+      "token": "+SQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg",
+      "error": "malformed"
+    },
+    {
+      "name": "padding characters",
+      "token": "ASQ1YjBjN2Y3ZS04ZjhhLTRjMWUtOWE1NS0yZjBkNmMxZTdhMTAkMGU3YzJiMWEtNmQ0Zi00YjZhLThjM2UtOWYxYTJiM2M0ZDVlASRhM2YxYzJkNC01ZTZmLTRhN2ItOGM5ZC0wZTFmMmEzYjRjNWQIbWF0Y2gtd3OQSbFqAAAAAA==.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg",
+      "error": "malformed"
+    },
+    {
+      "name": "empty token",
+      "token": "",
+      "error": "malformed"
+    },
+    {
+      "name": "dev token",
+      "token": "dev:0",
+      "error": "malformed"
+    },
+    {
+      "name": "too long",
+      "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.0cMqmQpgMEwSC5w4KHA-Z1Hi3S_R7SNV9mOmfM0aMsg",
+      "error": "malformed"
+    }
+  ]
+}

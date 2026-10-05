@@ -57,6 +57,7 @@ const PLAYER_TACKLING := 4
 const CLOSE_BAD_MESSAGE := 4400
 const CLOSE_UNAUTHORIZED := 4401
 const CLOSE_BAD_PATH := 4404
+const CLOSE_UNKNOWN_MATCH := 4404   # well-formed path, but no provisioned match by that id
 const CLOSE_HELLO_TIMEOUT := 4408
 const CLOSE_REPLACED := 4409
 const CLOSE_MATCH_OVER := 4410

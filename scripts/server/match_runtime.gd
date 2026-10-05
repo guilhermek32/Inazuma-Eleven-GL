@@ -19,10 +19,20 @@ extends Node
 ## OUTBOUND_SOFT_LIMIT; a peer that stays congested for CONGESTION_LIMIT_MS
 ## is disconnected.
 ##
-## Authentication: Milestone 2 accepts only development tokens "dev:<team>"
-## and only when `allow_dev_tokens` is set (DEV_NO_AUTH=1 on a debug build);
-## the room is then created on first use from `dev_config`. Signed lobby
-## tokens and provisioned rooms replace this in Milestone 3.
+## Authentication: HELLO carries a signed credential (MatchToken) issued by
+## the lobby. It must verify against `match_secret` (signature, expiry,
+## audience), name the match in the URL path, and match the reservation the
+## lobby made for its team when it provisioned the room through the control
+## API (RuntimeControlApi). Unprovisioned matches are refused with 4404,
+## finished ones (TerminalRegistry, survives restarts) with 4410, anything
+## else with 4401. Development tokens "dev:<team>" are honoured only when
+## `allow_dev_tokens` is set (DEV_NO_AUTH=1 on a debug build); they attach to
+## any existing room or create one on first use from `dev_config`.
+##
+## Finished provisioned matches: the terminal state is recorded and the
+## result written to the ResultSpool (both under `data_dir`) before the room
+## is freed; the spool delivers it to the results service in the background.
+## Development rooms record neither.
 ##
 ## Logs are one JSON object per line on stdout.
 
@@ -42,14 +52,51 @@ const PATH_PREFIX := "/ws/game/"
 const CLOSE_BAD_PATH := NetProtocol.CLOSE_BAD_PATH
 const CLOSE_BAD_MESSAGE := NetProtocol.CLOSE_BAD_MESSAGE
 
+const TERMINAL_MIN_RETENTION_S := 3600
+const PRUNE_INTERVAL_MS := 60000
+
 var allow_dev_tokens := false
 var dev_config := MatchConfig.new()
+var match_secret := PackedByteArray()
+## Random UUID per process start: lets the lobby detect a restarted runtime.
+var boot_id := ""
+var data_dir := ""
+var registry := TerminalRegistry.new()
+var spool := ResultSpool.new()
+var control: ControlServer
+var control_api: RuntimeControlApi
+var _last_prune_ms := 0
 
 var _tcp := TCPServer.new()
 var _next_id := 1
 # peer_id -> {ws, since, open, match_id, team, congested_since}
 var _peers := {}
 var _rooms := {}   # match_id -> MatchRoom
+
+func _init() -> void:
+	boot_id = new_uuid()
+
+## Opens the durable state under `dir` (terminal registry + result spool) and
+## queues any results a previous process left undelivered.
+func open_storage(dir: String) -> Error:
+	data_dir = dir
+	var err := DirAccess.make_dir_recursive_absolute(dir)
+	if err != OK:
+		log_event("storage_failed", {"dir": dir, "error": error_string(err)})
+		return err
+	registry.open(dir.path_join("terminal_matches.json"), now_unix())
+	err = spool.open(dir.path_join("spool"))
+	log_event("storage_opened", {"dir": dir, "terminal": registry.size(), "pending_results": spool.pending_ids().size()})
+	return err
+
+## Starts the internal control API (see RuntimeControlApi) on its own port.
+func start_control(port: int, bind_address := "*", token := "") -> Error:
+	control_api = RuntimeControlApi.new(self, token)
+	control = ControlServer.new()
+	control.handler = control_api.handle
+	var err := control.listen(port, bind_address)
+	log_event("control_listening" if err == OK else "control_listen_failed", {"port": port, "auth": token != ""})
+	return err
 
 func start(port := DEFAULT_PORT, bind_address := "*") -> Error:
 	var err := _tcp.listen(port, bind_address)
@@ -66,6 +113,8 @@ func stop() -> void:
 		(room as MatchRoom).dispose()
 	_rooms.clear()
 	_tcp.stop()
+	if control != null:
+		control.stop()
 
 func connection_count() -> int:
 	return _peers.size()
@@ -73,11 +122,26 @@ func connection_count() -> int:
 func room(match_id: String) -> MatchRoom:
 	return _rooms.get(match_id)
 
+func rooms() -> Dictionary:
+	return _rooms
+
+## Control API and result delivery: serviced per frame, outside the physics tick.
+func _process(_delta: float) -> void:
+	var now := Time.get_ticks_msec()
+	if control != null:
+		control.poll(now)
+	spool.poll(now)
+	if now - _last_prune_ms > PRUNE_INTERVAL_MS:
+		_last_prune_ms = now
+		registry.prune(now_unix())
+
 func _physics_process(delta: float) -> void:
 	poll()
 	for match_id in _rooms.keys():
 		var r: MatchRoom = _rooms[match_id]
 		r.step(delta)
+		if r.state == MatchRoom.State.FINISHED and not r.recorded:
+			record_finished(r)
 		if r.is_done():
 			_close_room(match_id)
 
@@ -164,33 +228,140 @@ func _on_message(id: int, packet: PackedByteArray, is_text: bool) -> void:
 
 func _on_hello(id: int, token: String) -> void:
 	var entry: Dictionary = _peers[id]
-	var claim := _authenticate(token, entry.match_id)
-	if claim.is_empty():
-		log_event("auth_failed", {"peer": id, "match_id": entry.match_id})
-		_drop(id, NetProtocol.CLOSE_UNAUTHORIZED, "invalid token")
+	var match_id: String = entry.match_id
+	var auth := _authorize(token, match_id)
+	if auth.has("close"):
+		log_event("auth_failed", {"peer": id, "match_id": match_id, "reason": auth.reason})
+		_drop(id, int(auth.close), str(auth.reason))
 		return
-	var r: MatchRoom = _rooms.get(entry.match_id)
-	if r == null:
+	var r: MatchRoom = _rooms.get(match_id)
+	if r == null:   # only dev tokens get here: create the room on first use
 		if _rooms.size() >= MAX_ROOMS:
 			_drop(id, NetProtocol.CLOSE_MATCH_OVER, "runtime at capacity")
 			return
-		r = MatchRoom.new(entry.match_id, dev_config, randi(), send_to, close_peer)
-		_rooms[entry.match_id] = r
-		log_event("room_created", {"match_id": entry.match_id})
+		r = MatchRoom.new(match_id, dev_config, randi(), send_to, close_peer)
+		_rooms[match_id] = r
+		log_event("room_created", {"match_id": match_id, "dev": true})
 	if r.state == MatchRoom.State.FINISHED:
 		_drop(id, NetProtocol.CLOSE_MATCH_OVER, "match is over")
 		return
-	entry.team = claim.team
-	var epoch := r.attach(claim.team, id)
-	log_event("peer_joined", {"peer": id, "match_id": entry.match_id, "team": claim.team, "epoch": epoch})
+	entry.team = auth.team
+	var epoch := r.attach(auth.team, id)
+	log_event("peer_joined", {"peer": id, "match_id": match_id, "team": auth.team, "epoch": epoch})
 
-## Returns {"team": int} for a valid token, {} otherwise.
-func _authenticate(token: String, _match_id: String) -> Dictionary:
+## Returns {"team": int} when the credential may attach to `match_id`, else
+## {"close": code, "reason": text}.
+func _authorize(token: String, match_id: String) -> Dictionary:
 	if allow_dev_tokens and token.begins_with("dev:"):
 		var team_str := token.substr(4)
-		if team_str == "0" or team_str == "1":
-			return {"team": int(team_str)}
-	return {}
+		if team_str != "0" and team_str != "1":
+			return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "invalid token"}
+		if not registry.lookup(match_id).is_empty():
+			return {"close": NetProtocol.CLOSE_MATCH_OVER, "reason": "match is over"}
+		return {"team": int(team_str)}
+	if match_secret.is_empty():
+		return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "invalid token"}
+	var v := MatchToken.verify(token, match_secret, now_unix())
+	if not v.ok:
+		return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "invalid token (%s)" % v.error}
+	var claims: Dictionary = v.claims
+	if claims.match_id != match_id:
+		return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "token is for another match"}
+	if not registry.lookup(match_id).is_empty():
+		return {"close": NetProtocol.CLOSE_MATCH_OVER, "reason": "match is over"}
+	var r: MatchRoom = _rooms.get(match_id)
+	if r == null or not r.provisioned:
+		return {"close": NetProtocol.CLOSE_UNKNOWN_MATCH, "reason": "unknown match"}
+	var res: Dictionary = r.reservations[int(claims.team)]
+	if res.is_empty() or res.reservation_id != claims.reservation_id or res.player_id != claims.player_id:
+		return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "no such reservation"}
+	if r.expires_at > 0 and int(claims.exp) > r.expires_at:
+		return {"close": NetProtocol.CLOSE_UNAUTHORIZED, "reason": "token outlives the match"}
+	return {"team": int(claims.team)}
+
+# --- provisioning (called by RuntimeControlApi) --------------------------------------
+
+## Creates a provisioned room. The caller has checked capacity and conflicts.
+func provision(match_id: String, config: MatchConfig, p_expires_at: int) -> MatchRoom:
+	var r := MatchRoom.new(match_id, config, randi(), send_to, close_peer)
+	r.provisioned = true
+	r.expires_at = p_expires_at
+	_rooms[match_id] = r
+	log_event("room_provisioned", {"match_id": match_id, "half_length_s": config.half_length_s, "expires_at": p_expires_at})
+	return r
+
+## Cancels a room that hasn't kicked off; false once it is running.
+func cancel(match_id: String) -> bool:
+	var r: MatchRoom = _rooms.get(match_id)
+	if r == null or not r.cancel():
+		return false
+	record_finished(r)
+	return true
+
+## Durably records a finished room: result into the spool first (full time or
+## forfeit of a provisioned match), then its terminal state. Runs once per
+## room, before the room is freed.
+func record_finished(r: MatchRoom) -> void:
+	if r.recorded:
+		return
+	r.recorded = true
+	var reason := str(r.result.get("reason", ""))
+	log_event("match_finished", {"match_id": r.match_id, "reason": reason, "winner": r.result.get("winner", -1),
+			"score": [r.result.get("score_left", 0), r.result.get("score_right", 0)], "provisioned": r.provisioned})
+	if not r.provisioned:
+		return
+	if reason == "full_time" or reason == "forfeit":
+		spool.write(result_record(r))
+	var retain := maxi(r.expires_at, now_unix() + TERMINAL_MIN_RETENTION_S)
+	registry.record(r.match_id, state_name(r), reason, retain, now_unix())
+
+## The self-contained result document delivered to the results service.
+func result_record(r: MatchRoom) -> Dictionary:
+	var players := []
+	for t in 2:
+		var res: Dictionary = r.reservations[t]
+		players.append({"team": t, "player_id": res.get("player_id", ""), "nickname": res.get("nickname", "")})
+	var winner: int = r.result.get("winner", -1)
+	return {
+		"match_id": r.match_id,
+		"config_version": r.config.version,
+		"config": r.config.to_dict(),
+		"players": players,
+		"score_left": r.result.score_left,
+		"score_right": r.result.score_right,
+		"winner": winner if winner >= 0 else null,
+		"reason": r.result.reason,
+		"stats": r.result.stats,
+		"started_at": iso_time(r.started_unix) if r.started_unix > 0 else null,
+		"finished_at": iso_time(r.finished_unix),
+		"runtime_boot_id": boot_id,
+	}
+
+## Lifecycle name used by the control API: waiting, running, paused,
+## completed (full time / forfeit) or cancelled.
+static func state_name(r: MatchRoom) -> String:
+	match r.state:
+		MatchRoom.State.WAITING:
+			return "waiting"
+		MatchRoom.State.RUNNING:
+			return "running"
+		MatchRoom.State.PAUSED:
+			return "paused"
+	return "cancelled" if str(r.result.get("reason", "")) == "cancelled" else "completed"
+
+static func now_unix() -> int:
+	return int(Time.get_unix_time_from_system())
+
+static func iso_time(unix: int) -> String:
+	return Time.get_datetime_string_from_unix_time(unix) + "Z"
+
+## Random version-4 UUID.
+static func new_uuid() -> String:
+	var b := Crypto.new().generate_random_bytes(16)
+	b[6] = (b[6] & 0x0F) | 0x40
+	b[8] = (b[8] & 0x3F) | 0x80
+	var h := b.hex_encode()
+	return "%s-%s-%s-%s-%s" % [h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12)]
 
 ## Sends `bytes` to a peer. Droppable messages (snapshots) are skipped while
 ## the peer's outbound buffer is congested; a peer congested for too long is
@@ -249,6 +420,7 @@ func _forget(id: int, code: int) -> void:
 
 func _close_room(match_id: String) -> void:
 	var r: MatchRoom = _rooms[match_id]
+	record_finished(r)   # no-op when already recorded; never free an unrecorded result
 	log_event("room_closed", {"match_id": match_id, "result": r.result})
 	for t in 2:
 		if r.is_attached(t):
