@@ -11,9 +11,9 @@ This repo contains two implementations of the same arcade 11v11 football game, s
 
 (The earlier Godot 2D port was removed once the 3D build superseded it.)
 
-There are headless test suites (`tests/run_sim_tests.gd`, `tests/run_net_tests.gd`, `tests/run_scene_smoke.gd`, see Commands); no linter.
+There are headless Godot test suites (`tests/run_sim_tests.gd`, `run_net_tests.gd`, `run_runtime_tests.gd`, `run_online_smoke.gd`, `run_scene_smoke.gd`), pytest suites for the Python services, and Playwright/Node e2e scripts in `tests/e2e/` (see Commands); no linter.
 
-The game is being turned into an online two-player system: lobby, match runtime and results services behind a Caddy gateway, deployed with Docker Compose. Milestones 0–2 are done: the reusable `MatchSession` component, the bootstrap/runtime/export spike, and the online vertical slice (protocol, authoritative rooms, interpolating client). Rooms are still created from development tokens; the lobby, signed tokens and results service are Milestone 3. Review notes: `MICROSERVICES_PLAN_REVIEW.md`.
+The game is being turned into an online two-player system: lobby, match runtime and results services behind a Caddy gateway, deployed with Docker Compose. Milestones 0–3 are done: the reusable `MatchSession` component, the bootstrap/runtime/export spike, the online vertical slice (protocol, authoritative rooms, interpolating client), and the mandatory microservices (lobby, match runtime, results with signed credentials, provisioning and durable result delivery; see "Online services" below). Next: the in-game lobby menu and browser deployment polish (Milestone 4). Review notes: `MICROSERVICES_PLAN_REVIEW.md`.
 
 ## Commands
 
@@ -33,9 +33,10 @@ godot-4 --headless --quit-after 5 --path .                # smoke-test: boots th
 godot-4 --headless --import --path .                      # full import + script compile (run after adding a class_name script)
 godot-4 --headless --path . --script res://tests/run_sim_tests.gd   # rules/config/session tests (no 3D); exits non-zero on failure
 godot-4 --headless --path . --script res://tests/run_net_tests.gd   # protocol, input queue, interpolation, runtime/rooms over loopback
+godot-4 --headless --path . --script res://tests/run_runtime_tests.gd   # token vectors, control API, signed HELLO, terminal registry, result spool
 godot-4 --headless --path . --script res://tests/run_online_smoke.gd   # runtime + two 3D games playing online in one process
 godot-4 --headless --fixed-fps 60 --path . --script res://tests/run_scene_smoke.gd   # full offline AI match through the 3D controller
-godot-4 --headless --path . -- --server                   # run the headless match runtime (port 8910)
+godot-4 --headless --path . -- --server                   # run the headless match runtime (8910 players, 8911 control API)
 ```
 
 Docker toolchain (`tools/godot/Dockerfile`, official binaries verified by SHA-512). From Git Bash:
@@ -43,13 +44,29 @@ Docker toolchain (`tools/godot/Dockerfile`, official binaries verified by SHA-51
 ```bash
 docker build -f tools/godot/Dockerfile --target godot -t inazuma/godot:4.7.2 tools/godot
 MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/project" inazuma/godot:4.7.2 --headless --path /project --script res://tests/run_sim_tests.gd
-docker compose up --build                                 # gateway + match runtime; http://localhost:8080 (?netprobe checks the WebSocket path)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build   # debug runtime accepting dev tokens: two windows at /?match=x&token=dev:0 and dev:1
+cp .env.example .env                                      # once: compose refuses to start without the secrets
+docker compose up --build                                 # full stack; http://localhost:8080 (?netprobe checks the WebSocket path)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build   # debug runtime also accepting dev tokens: /?match=x&token=dev:0 and dev:1
+docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests     # pytest, throwaway PostgreSQL
+docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+docker compose -f services/docker-compose.test.yml down -v
+python tests/vectors/generate_token_vectors.py            # regenerate the shared credential vectors (then rerun both suites)
+bash tests/e2e/run_failure_checks.sh                      # stack running: results down at full time, runtime restart mid-match
 ```
 
-Online play without the lobby: desktop `godot-4 --path . -- --connect=ws://127.0.0.1:8910/ws/game/<id> --token=dev:<team>` against a runtime started with `DEV_NO_AUTH=1` (debug builds only; the release server never accepts dev tokens). Browser e2e tests in `tests/e2e/` (`netprobe.mjs`, `two_players.mjs`) run in the Playwright image inside the gateway's network namespace — see their headers.
+Online play without the lobby: desktop `godot-4 --path . -- --connect=ws://127.0.0.1:8910/ws/game/<id> --token=dev:<team>` against a runtime started with `DEV_NO_AUTH=1` (debug builds only; the release server never accepts dev tokens). Browser e2e tests in `tests/e2e/` (`netprobe.mjs`, `two_players.mjs` for the dev stack, `lobby_match.mjs` for the full lobby → match → results flow) run in the Playwright image inside the gateway's network namespace — see their headers; clean `tests/e2e/node_modules`, `package.json`, `package-lock.json` afterwards.
 
 Running Godot in the Linux container rewrites `assets/*.import` with LF endings (content unchanged); `git checkout -- assets/` restores them from the index — **stage intentional asset edits first**, or that command discards them too. The built-in browser pane only advances Godot web frames while visible, so verify the web build with `tests/e2e/netprobe.mjs` (headless Chromium in the Playwright image).
+
+## Online services (Milestone 3)
+
+Three business services, each with its own entry point, image, tests and health interface; gateway (Caddy, `services/gateway/Caddyfile`) and PostgreSQL (`services/postgres/init/` creates separate `lobby`/`results` databases and roles) are infrastructure. Only the gateway publishes ports.
+
+- **lobby** (`services/lobby`, FastAPI + psycopg 3): room codes, guest player ids, reservations, provisioning records. Public via `/api/lobby/v1/...` (prefix stripped): `POST /rooms`, `POST /rooms/{code}/join`, `GET /rooms/{code}`. Provisions the runtime *before* issuing a credential; idempotent by `request_id`; status reconciled from the runtime (`service.py`, `reconcile.py` document the rules).
+- **match runtime** (Godot, `scripts/server/`): verifies credentials locally on HELLO, owns live matches, the terminal registry and the result spool (`/data` volume).
+- **results** (`services/results`, FastAPI + psycopg 3): `POST /internal/v1/matches` (bearer `RESULTS_INGEST_TOKEN`, idempotent by match_id: identical → 200, conflicting → 409); public `/api/stats/v1/matches/recent` and `/api/stats/v1/leaderboard` (3/1/0, then goal difference, then goals for; keyset cursors).
+
+Credentials: claims `{v, match_id, reservation_id, team, player_id, aud: "match-ws", exp}` in a fixed little-endian byte layout, HMAC-SHA256 with `MATCH_SECRET`, `base64url(payload).base64url(sig)` (see `credentials.py`). Secrets come from `.env` (`.env.example` documents them); `DEV_NO_AUTH` is only ever set by `docker-compose.dev.yml`. Python logs are one JSON object per line, like the runtime's `MatchRuntime.log_event`.
 
 ## Godot 3D Architecture (the big picture)
 
@@ -76,6 +93,9 @@ Code is organized by responsibility under `scripts/`:
   - `MatchRuntime` is the WebSocket listener. It enforces handshake/HELLO deadlines, size and connection limits and backpressure, authenticates HELLO, and ticks rooms in `_physics_process`.
   - `MatchRoom` runs one match. Its states are WAITING → RUNNING ⇄ PAUSED (30 s reconnect grace, then forfeit) → FINISHED. It sends snapshots every 2 ticks, and resets bump `state_epoch` and are flagged as discontinuities.
   - `RemoteInputQueue` sets the server-side input semantics: one action per kind per tick, strict id order, the shot charge measured by the server, neutral input after 250 ms of silence, and a reset on reconnect.
+  - `RuntimeControlApi` (routes) on `ControlServer` (bounded nonblocking HTTP/1.1: 8 KB, 2 s deadline, 16 connections) is the internal control API the lobby uses: idempotent `PUT /internal/v1/matches/{id}` (MatchConfig + credential expiry) and `.../reservations/{team}`, `GET` status with `boot_id`, `DELETE` cancel, `GET /health`. Polled in `_process`, never in the physics tick.
+  - `TerminalRegistry` persists finished/cancelled match ids under `RUNTIME_DATA_DIR` until their credentials expire; `ResultSpool` writes each finished result atomically before the room is freed and POSTs it to the results service with capped backoff (409/400/422 → `spool/rejected/`).
+  - `MatchToken` (`net/`) verifies the lobby's signed credentials; `services/lobby/app/credentials.py` is the Python twin, kept byte-identical by `tests/vectors/token_vectors.json`.
 - The controller's *online adapter* (`start_online`, `--connect=`/`--token=` launch args or web `?match=&token=`) mirrors the runtime's match: it sends input, applies interpolated snapshots to `session.sim`, and dispatches runtime events through the same `_dispatch_event` as offline.
 - `config/game_config.gd` (`GameConfig`) — field geometry constants, GLB/animation constants, the `PlayerRole` and `GameState` enums, `MATCH_LENGTHS`, and the `to_3d()` coordinate helper. Shared by every module as `GameConfig.X`.
 - `data/` — plain state classes: `PlayerState`, `BallState`, `InputSnapshot`, `TeamState` (players + device/formation/kit + human selection state; `sim.teams[0]`=red, `[1]`=blue).

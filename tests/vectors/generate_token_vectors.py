@@ -7,6 +7,10 @@ The output is deterministic. Both the lobby's pytest suite and the Godot
 runtime tests (tests/run_runtime_tests.gd) verify every vector: valid cases
 must sign to exactly the same token and verify back to the same claims;
 invalid cases must fail with exactly the listed error code.
+
+Godot parses every JSON number as a float, so the "exp" values written into
+the JSON stay below 2**53; the 2**63 boundary is covered by a re-signed
+invalid vector, whose number lives inside the token bytes.
 """
 
 import json

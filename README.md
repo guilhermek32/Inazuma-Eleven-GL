@@ -105,8 +105,19 @@ scripts/
 
 ```bash
 godot-4 --headless --path . --script res://tests/run_sim_tests.gd           # rules, config, session
-godot-4 --headless --path . --script res://tests/run_net_tests.gd           # runtime WebSocket listener
+godot-4 --headless --path . --script res://tests/run_net_tests.gd           # protocol, runtime WebSocket listener
+godot-4 --headless --path . --script res://tests/run_runtime_tests.gd       # credentials, control API, spool, registry
+godot-4 --headless --path . --script res://tests/run_online_smoke.gd        # two 3D games online against a runtime
 godot-4 --headless --fixed-fps 60 --path . --script res://tests/run_scene_smoke.gd   # full offline match in the 3D scene
+```
+
+The Python services have pytest suites that run in Docker against a throwaway
+PostgreSQL:
+
+```bash
+docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
+docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+docker compose -f services/docker-compose.test.yml down -v
 ```
 
 The same commands run in the pinned Docker toolchain (Git Bash shown):
@@ -124,30 +135,79 @@ discards them as well.
 
 ---
 
-## Online play (in progress)
+## Online play
 
-The online version runs the match on an authoritative headless Godot **match runtime**
-and serves the web build through a **Caddy gateway**, deployed with Docker Compose. The
-full plan (lobby, results service, netcode) is being built in milestones.
+Online matches run on three independent business services behind one gateway,
+deployed with Docker Compose:
+
+| Service | Owns | Interfaces |
+| --- | --- | --- |
+| **lobby** (`services/lobby`, FastAPI) | room codes, guest player ids, reservations, provisioning records (its own PostgreSQL database) | public `/api/lobby/v1/...`; calls the runtime's control API |
+| **match runtime** (headless Godot, `scripts/server`) | live authoritative matches, terminal-match registry, durable result spool (`/data` volume) | player WebSocket `/ws/game/<match_id>`; internal control API `:8911` |
+| **results** (`services/results`, FastAPI) | match history and leaderboard (its own PostgreSQL database) | public `/api/stats/v1/...`; internal ingestion `POST /internal/v1/matches` |
+
+The **gateway** (Caddy: TLS, web build, routing) and **PostgreSQL** (one instance,
+separate `lobby` and `results` databases and roles) are infrastructure. Only the
+gateway publishes ports; the runtime control API and results ingestion are never routed.
 
 ```bash
+cp .env.example .env             # then replace every secret
 docker compose up --build        # gateway on http://localhost:8080
 ```
 
-- `http://localhost:8080/` loads the game in the browser (Compatibility renderer).
-- `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket path.
-- `tests/e2e/netprobe.mjs` runs that check in headless Chromium (see the file header).
+Match flow:
 
-Until the lobby exists (next milestone), two players can try online play with the
-development stack, whose debug runtime accepts development tokens:
+1. `POST /api/lobby/v1/rooms {nickname, half_length_s, request_id}`: the lobby provisions
+   the match on the runtime (`PUT /internal/v1/matches/{match_id}` + team-0 reservation),
+   then returns `{room_code, match_id, team: 0, token, ws_url, play_url, player_id}`.
+2. `POST /api/lobby/v1/rooms/{code}/join {nickname, request_id}` reserves team 1
+   (exactly one concurrent joiner wins) and returns its credential.
+3. Each player opens `play_url` (`/?match=<match_id>&token=<token>`); the browser sends the
+   token in HELLO and the runtime verifies it locally (signature, expiry, audience,
+   match, reservation).
+4. At full time (or forfeit) the runtime writes the result to its spool and delivers it
+   to the results service in the background, retrying until acknowledged.
+5. `GET /api/lobby/v1/rooms/{code}` reports `waiting|running|paused|completed|...`;
+   `GET /api/stats/v1/matches/recent` and `/api/stats/v1/leaderboard` show history and
+   rankings (3/1/0 points, then goal difference, then goals for).
+
+Credentials, contracts and failure behaviour are documented at the top of
+`services/lobby/app/credentials.py`, `scripts/server/runtime_control_api.gd`,
+`scripts/server/result_spool.gd`, `services/lobby/app/reconcile.py` and
+`services/results/app/service.py`.
+
+Environment (`.env`, see `.env.example`): `MATCH_SECRET` (credential HMAC key, lobby +
+runtime), `RUNTIME_CONTROL_TOKEN` (lobby -> runtime), `RESULTS_INGEST_TOKEN`
+(runtime -> results), `POSTGRES_PASSWORD`, `LOBBY_DB_PASSWORD`, `RESULTS_DB_PASSWORD`,
+optional `SITE_ADDRESS` / `GATEWAY_HTTP_PORT` / `GATEWAY_HTTPS_PORT`. The runtime also
+reads `MATCH_RUNTIME_PORT`, `RUNTIME_CONTROL_PORT`, `RESULTS_URL` and
+`RUNTIME_DATA_DIR`, which the compose file sets.
+
+End-to-end checks against the running stack (Playwright container in the gateway's
+network namespace, so the page is served from `localhost`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+MSYS_NO_PATHCONV=1 docker run --rm --network container:inazuma-online-gateway-1 \
+  -v "$(pwd -W)/tests/e2e:/e2e" -w /e2e mcr.microsoft.com/playwright:v1.63.0-noble \
+  sh -c "npm i --silent --no-save playwright@1.63.0 && node lobby_match.mjs http://localhost"
+bash tests/e2e/run_failure_checks.sh   # results down at full time; runtime restart mid-match
 ```
 
-Then open `http://localhost:8080/?match=test1&token=dev:0` (red) and
-`http://localhost:8080/?match=test1&token=dev:1` (blue) in two browser windows.
-`tests/e2e/two_players.mjs` automates this check.
+- `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket
+  path (`tests/e2e/netprobe.mjs` automates it).
+- The development override runs a debug runtime that also accepts development tokens
+  and creates rooms on first use (same `.env` needed):
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+  ```
+
+  Then open `http://localhost:8080/?match=test1&token=dev:0` (red) and
+  `http://localhost:8080/?match=test1&token=dev:1` (blue); `tests/e2e/two_players.mjs`
+  automates this. Never deploy it.
+
+The in-game lobby menu (create/join from the game UI) is the next milestone; until
+then rooms are created through the lobby API and opened through `play_url`.
 
 ---
 
