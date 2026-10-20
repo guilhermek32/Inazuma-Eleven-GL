@@ -35,10 +35,10 @@ before talking through the architecture).
   on Linux). Allow about 10 GB of disk: the Playwright image used by the browser
   checks alone is 3.5 GB.
 - **Git**, and on Windows **Git Bash** (it ships `openssl`).
-- **Two browser profiles** for the PvP demo: a normal and a private window, or two
-  different browsers. Two tabs in one profile share the saved guest identity, and a
-  match between one guest and itself is not recorded (section "If something goes
-  wrong").
+- **Two browser windows** for the PvP demo. A normal and a private window (or two
+  browsers) keep the two players' saved identities apart; two tabs of one profile also
+  work, because the lobby gives the joiner a fresh guest id when it presents the
+  creator's own.
 - Free host ports **8080** and **8443** (or set `GATEWAY_HTTP_PORT` / `GATEWAY_HTTPS_PORT`
   in `.env`).
 - No local Godot is needed: the game and the tests run in containers.
@@ -327,7 +327,7 @@ docker volume rm inazuma-e2e-node-modules    # the Playwright scripts' node_modu
 | The page stays black, or runs at a few frames per second | The browser has no GPU acceleration (software WebGL). Use a desktop browser with hardware acceleration. `?quality=web` forces the light visual tier. |
 | The page doesn't start when opened by IP or host name from another machine | Godot's web build needs a secure context: use `http://localhost` locally, or set `SITE_ADDRESS` to a real domain for HTTPS. |
 | "Play vs AI" says the AI opponent is unavailable | `docker compose ps ai-bot`; `docker compose start ai-bot`; check `docker compose logs ai-bot`. PvP is unaffected. |
-| The match doesn't appear in Recent Matches | The results service may be down: the result waits in the spool (step 6). If `/data/spool/rejected/` holds it, results refused it: `docker compose logs match-runtime \| grep result_rejected`. The usual cause is both windows using the same browser profile, so both teams were the same guest; use a private window for B. |
+| The match doesn't appear in Recent Matches | The results service may be down: the result waits in the spool (step 6). If `/data/spool/rejected/` holds it, results refused it: `docker compose logs match-runtime \| grep result_rejected` names the reason the results service gave. |
 | `No such container: inazuma-online-gateway-1` from an e2e script | The stack isn't running, or was started under another project name: start it, or export `COMPOSE_PROJECT_NAME=<name>` for the scripts. |
 | Git Bash mangles `/project` or `/data` paths | Prefix the command with `MSYS_NO_PATHCONV=1` (the e2e scripts already do). |
 | `git status` shows many modified `assets/*.import` after running Godot in Docker | Only the line endings changed: `git checkout -- assets/` (stage intentional asset edits first). |

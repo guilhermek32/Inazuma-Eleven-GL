@@ -856,11 +856,11 @@ Collected from `docs/measurements.md`, `docs/ai_bot.md`, `README.md`, `CLAUDE.md
 10. **Guest identities only.** The `player_id` is a UUID kept in the client's settings;
     anyone who has it can play as that guest. That is fine for a demo leaderboard but
     gives no ranking integrity. Real accounts are out of scope. The id is shared by
-    every window of one browser profile (and by desktop instances on one machine), and
-    the lobby does not stop a guest from joining its own room. Results refuses such a
-    match (422: "the two players must be different"), so it ends in
-    `spool/rejected/` and never reaches the history. A fix would be for the lobby to
-    issue a fresh guest id to a joiner with the creator's id.
+    every window of one browser profile (and by desktop instances on one machine), so a
+    joiner presenting the creator's own id is given a fresh guest id by the lobby
+    (`join_room`; test `test_joining_your_own_room_as_the_same_guest_gets_a_fresh_guest_id`):
+    the match still has two distinct players and reaches the history. The browser then
+    stores the newer id, so the two tabs' leaderboard rows are not merged afterwards.
 11. **`play_url` carries the credential in the query string** (`/?match=<id>&token=...`),
     where it can end up in browser history and the gateway's access log. The in-game
     menu passes the token internally instead; the link form is kept for the e2e scripts

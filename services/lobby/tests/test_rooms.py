@@ -118,6 +118,19 @@ def test_returning_guest_keeps_its_player_id(client):
     assert unknown.status_code == 404
 
 
+def test_joining_your_own_room_as_the_same_guest_gets_a_fresh_guest_id(client, fake_runtime):
+    # Two tabs of one browser profile share the stored player_id.
+    room = create(client).json()
+    r = client.post(f"/v1/rooms/{room['room_code']}/join",
+                    json={"nickname": "Bia", "request_id": rid(), "player_id": room["player_id"]})
+    assert r.status_code == 200, r.text
+    joined = r.json()
+    assert joined["team"] == 1 and joined["player_id"] != room["player_id"]
+    assert cr.verify(joined["token"], SECRET, int(time.time())).player_id == joined["player_id"]
+    reserved = fake_runtime.matches[room["match_id"]]["res"]
+    assert reserved[0]["player_id"] != reserved[1]["player_id"]
+
+
 def test_concurrent_joins_exactly_one_wins_service_level(client):
     code = create(client).json()["room_code"]
     barrier = threading.Barrier(8)

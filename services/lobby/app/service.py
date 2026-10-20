@@ -221,6 +221,13 @@ class LobbyService(ReconcileMixin):
                     raise Conflict("room_closed", f"the room is not accepting players ({room['status']})")
                 if conn.execute("SELECT 1 FROM reservations WHERE room_code = %s AND team = 1", (code,)).fetchone():
                     raise Conflict("room_full", "the room is full")
+                # Two tabs of one browser share the stored guest id. A match needs two
+                # distinct players (results rejects a self-match), so a joiner presenting
+                # the creator's own id plays as a fresh guest instead.
+                creator = conn.execute("SELECT player_id FROM reservations WHERE room_code = %s AND team = 0",
+                                       (code,)).fetchone()
+                if player_id and creator is not None and str(creator["player_id"]) == player_id:
+                    player_id = None
                 pid = self._player(conn, player_id, nickname)
                 conn.execute("INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id) "
                              "VALUES (%s, %s, 1, %s, %s, %s)", (uuid.uuid4(), code, pid, nickname, request_id))
