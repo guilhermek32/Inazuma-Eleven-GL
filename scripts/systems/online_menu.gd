@@ -64,6 +64,7 @@ func show_page(page_name: String) -> void:
 	for key in _pages:
 		(_pages[key] as Control).visible = key == page_name
 	if page_name == "home":
+		_show_status("", false)
 		_set_busy(lobby.is_busy())
 		if nickname_edit.text == "":
 			nickname_edit.grab_focus()

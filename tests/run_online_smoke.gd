@@ -4,7 +4,9 @@ extends SceneTree
 ## two full 3D game instances (scenes/main_3d.tscn) connected to it over
 ## loopback WebSockets, one per team. Checks that both games enter the match,
 ## mirror the runtime's state through interpolated snapshots, play the goal
-## events, and finish on the runtime's match_over.
+## events, and finish on the runtime's match_over. The red game goes through
+## the Play Online menu's creator path (waiting page until kickoff), and a
+## pad press hands its team to that pad.
 ##
 ## Run: godot-4 --headless --path . --script res://tests/run_online_smoke.gd
 ## Exits 0 on success, 1 otherwise.
@@ -44,16 +46,40 @@ func _run() -> void:
 		root.add_child(game)
 		games.append(game)
 	await process_frame
-	for team in 2:
-		games[team].start_online("ws://127.0.0.1:%d/ws/game/%s" % [PORT, MATCH_ID], "dev:%d" % team)
+	var url := "ws://127.0.0.1:%d/ws/game/%s" % [PORT, MATCH_ID]
 	var red: Node = games[0]
 	var blue: Node = games[1]
+	# Red creates the room from the Play Online menu: it waits on the room-code
+	# page, connected, until the opponent arrives and the runtime kicks off.
+	red._set_game_state(GameConfig.GameState.ONLINE)
+	red.menu.online.show_page("waiting")
+	red.start_online_from_lobby(url, "dev:0", true)
+	var red_welcomed := func() -> bool: return red.net != null and red.net.is_ready()
+	_check(await _frames_until(red_welcomed, 600), "the creator connects from the waiting page")
+	await _frames_until(func() -> bool: return false, 30)
+	_check(red.game_state == GameConfig.GameState.ONLINE and red.menu.online.panel.visible and red.menu.online.page == "waiting",
+			"the creator stays on the waiting page while alone in the room")
+	blue.start_online(url, "dev:1")
 
 	var joined := func() -> bool: return red.game_state == GameConfig.GameState.PLAYING and blue.game_state == GameConfig.GameState.PLAYING and red.net_team() == 0 and blue.net_team() == 1
 	_check(await _frames_until(joined, 600), "both games join the online match on their own teams")
 	var room: MatchRoom = runtime.room(MATCH_ID)
 	var running := func() -> bool: return room != null and room.state == MatchRoom.State.RUNNING
 	_check(await _frames_until(running, 300), "the runtime kicks off")
+
+	# The last-used local device drives our team online: a pad, then the keyboard.
+	var pad := InputEventJoypadButton.new()
+	pad.device = 0
+	pad.button_index = JOY_BUTTON_A
+	pad.pressed = true
+	red._input(pad)
+	_check(red.sim.teams[0].device == 0, "a pad press hands the online team to that pad")
+	var key := InputEventKey.new()
+	key.physical_keycode = KEY_D
+	key.pressed = true
+	red._input(key)
+	_check(red.sim.teams[0].device == GameConfig.DEVICE_KBM and red.sim.teams[1].device == GameConfig.DEVICE_REMOTE,
+			"a key press hands it back to keyboard+mouse; the opponent stays remote")
 
 	# The mirrors follow the authoritative ball within interpolation lag: kick it
 	# on the runtime and compare a moving ball.
@@ -88,6 +114,8 @@ func _run() -> void:
 	_check(await _frames_until(both_over, 900), "full time on the runtime ends both games")
 	_check(red.menu.fulltime_label.text.begins_with("FULL TIME") and red.menu.fulltime_label.text.contains("1 - 0"),
 			"the full-time screen shows the runtime's result")
+	_check(red.menu.new_online_button.visible and not red.menu.rematch_button.visible,
+			"an online full time offers New Online Match, not an offline rematch")
 	# The runtime then closes the finished room; the games drop back to offline.
 	_check(await _frames_until(func() -> bool: return red.net == null and blue.net == null, 600), "the games leave online mode once the room closes")
 
