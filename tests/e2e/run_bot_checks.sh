@@ -11,7 +11,9 @@ set -u
 cd "$(dirname "$0")/../.."
 E2E="$(pwd -W 2>/dev/null || pwd)/tests/e2e"
 export MSYS_NO_PATHCONV=1
-GATEWAY=inazuma-online-gateway-1
+# COMPOSE_PROJECT_NAME selects a stack started under another project name.
+PROJECT="${COMPOSE_PROJECT_NAME:-inazuma-online}"
+GATEWAY="$PROJECT-gateway-1"
 IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble
 fail=0
 
@@ -38,7 +40,7 @@ phase down || fail=1
 echo "== 3. ai-bot started again"
 docker compose start ai-bot
 for _ in $(seq 1 60); do
-  [ "$(docker inspect -f '{{.State.Health.Status}}' inazuma-online-ai-bot-1 2>/dev/null)" = healthy ] && break
+  [ "$(docker inspect -f '{{.State.Health.Status}}' "$PROJECT-ai-bot-1" 2>/dev/null)" = healthy ] && break
   sleep 2
 done
 phase back || fail=1

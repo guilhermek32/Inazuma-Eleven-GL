@@ -12,7 +12,9 @@ set -u
 cd "$(dirname "$0")/../.."
 E2E="$(pwd -W 2>/dev/null || pwd)/tests/e2e"
 export MSYS_NO_PATHCONV=1
-GATEWAY=inazuma-online-gateway-1
+# COMPOSE_PROJECT_NAME selects a stack started under another project name.
+PROJECT="${COMPOSE_PROJECT_NAME:-inazuma-online}"
+GATEWAY="$PROJECT-gateway-1"
 IMAGE=mcr.microsoft.com/playwright:v1.63.0-noble
 fail=0
 

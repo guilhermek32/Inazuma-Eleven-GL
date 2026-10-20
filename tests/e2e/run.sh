@@ -6,13 +6,14 @@
 #   bash tests/e2e/run.sh online_menu.mjs [extra args...]
 #
 # Works from Linux and Git Bash. node_modules goes to a throwaway volume, so
-# nothing is left in tests/e2e.
+# nothing is left in tests/e2e. A stack started under another Compose project
+# name is found through COMPOSE_PROJECT_NAME (default inazuma-online).
 set -eu
 cd "$(dirname "$0")"
 here="$(pwd -W 2>/dev/null || pwd)"
 export MSYS_NO_PATHCONV=1
 script="$1"; shift
-docker run --rm --network container:inazuma-online-gateway-1 \
+docker run --rm --network "container:${COMPOSE_PROJECT_NAME:-inazuma-online}-gateway-1" \
   -v "$here:/e2e" -v inazuma-e2e-node-modules:/e2e/node_modules -w /e2e \
   mcr.microsoft.com/playwright:v1.63.0-noble \
   sh -c '[ -d node_modules/playwright ] || npm i --silent --no-save --no-package-lock playwright@1.63.0; node "$0" http://localhost "$@"' "$script" "$@"

@@ -8,3 +8,4 @@ include
 **/__pycache__
 **/.venv
 **/.pytest_cache
+.env
