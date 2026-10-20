@@ -9,13 +9,23 @@
 #   /api/lobby/v1/*      lobby public API (prefix /api/lobby stripped)
 #   /api/stats/v1/*      results public reads (prefix /api/stats stripped)
 #   /api/*               404: internal APIs are never routed
-#   /healthz             gateway liveness
+#   /healthz             gateway liveness (public)
+#
+# A second, internal listener (127.0.0.1:8081, plain HTTP in both modes)
+# answers /healthz for the container healthcheck: with a domain in
+# SITE_ADDRESS, port 80 only redirects to HTTPS, which a local wget can't follow.
 #   everything else      the Godot web export (static files)
 #
 # The web export is single-threaded, so COOP/COEP headers are not required.
 
 {
 	admin off
+}
+
+http://:8081 {
+	bind 127.0.0.1
+	respond /healthz "ok" 200
+	respond 404
 }
 
 {$SITE_ADDRESS::80} {

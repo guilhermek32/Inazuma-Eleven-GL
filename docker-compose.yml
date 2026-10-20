@@ -29,6 +29,14 @@ x-secrets:
   control-token: &control-token ${RUNTIME_CONTROL_TOKEN:?set RUNTIME_CONTROL_TOKEN in .env (see .env.example)}
   ingest-token: &ingest-token ${RESULTS_INGEST_TOKEN:?set RESULTS_INGEST_TOKEN in .env (see .env.example)}
 
+# Every container logs JSON lines to Docker's json-file driver, rotated so a
+# long-running VPS can't fill its disk: at most 5 files of 10 MB per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   gateway:
     build:
@@ -51,11 +59,13 @@ services:
       results:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/healthz"]
+      # Internal listener: works whether :80 serves the site or only redirects to HTTPS.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
       interval: 10s
       timeout: 3s
       retries: 3
     restart: unless-stopped
+    logging: *logging
 
   match-runtime:
     build:
@@ -70,6 +80,8 @@ services:
       RUNTIME_CONTROL_TOKEN: *control-token
       RESULTS_URL: http://results:8000
       RESULTS_INGEST_TOKEN: *ingest-token
+      RUNTIME_MAX_CONNECTIONS: ${RUNTIME_MAX_CONNECTIONS:-64}
+      RUNTIME_MAX_ROOMS: ${RUNTIME_MAX_ROOMS:-32}
     volumes:
       - runtime-data:/data
     networks: [internal]
@@ -80,6 +92,7 @@ services:
       start_period: 20s
       retries: 3
     restart: unless-stopped
+    logging: *logging
 
   lobby:
     build:
@@ -103,6 +116,7 @@ services:
       start_period: 15s
       retries: 3
     restart: unless-stopped
+    logging: *logging
 
   results:
     build:
@@ -122,6 +136,7 @@ services:
       start_period: 15s
       retries: 3
     restart: unless-stopped
+    logging: *logging
 
   postgres:
     image: postgres:17-alpine
@@ -141,6 +156,7 @@ services:
       start_period: 20s
       retries: 10
     restart: unless-stopped
+    logging: *logging
 
 networks:
   public: {}

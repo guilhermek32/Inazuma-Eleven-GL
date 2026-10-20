@@ -94,7 +94,7 @@ func _put_match(match_id: String, body: Variant) -> Dictionary:
 		if r.provisioned and r.config.to_dict() == config.to_dict() and r.expires_at == expires_at:
 			return _reply(200, _status(r))
 		return _reply(409, {"error": "match already provisioned with a different configuration"})
-	if runtime.rooms().size() >= MatchRuntime.MAX_ROOMS:
+	if runtime.rooms().size() >= runtime.max_rooms:
 		return _reply(503, {"error": "runtime at capacity"})
 	return _reply(201, _status(runtime.provision(match_id, config, expires_at)))
 

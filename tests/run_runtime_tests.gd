@@ -5,6 +5,8 @@ extends SceneTree
 ## provisioning/reservations, bounded HTTP parsing), signed-credential HELLO,
 ## the terminal registry and the result spool, including delivery retries
 ## against a fake results service and recovery after a runtime restart.
+## Also the configurable capacity limits, and the game's LobbyClient against a
+## fake lobby (request ids, error mapping, URL derivation).
 ##
 ## Run: godot-4 --headless --path . --script res://tests/run_runtime_tests.gd
 ## Exits 0 when every check passes, 1 otherwise.
@@ -12,6 +14,7 @@ extends SceneTree
 const WS_PORT := 18920
 const CONTROL_PORT := 18921
 const RESULTS_PORT := 18922
+const LOBBY_PORT := 18923
 const CONTROL_TOKEN := "test-control-token"
 const INGEST_TOKEN := "test-ingest-token"
 const SECRET := "runtime-test-secret"
@@ -25,6 +28,8 @@ var results_status := 500
 var results_bodies: Array = []
 var results_auth: Array = []
 var _clients: Array = []
+var fake_lobby: ControlServer
+var lobby_requests: Array = []
 
 func _initialize() -> void:
 	_run.call_deferred()
@@ -46,6 +51,7 @@ func _run() -> void:
 	runtime = _new_runtime()
 	await _test_health_and_auth()
 	await _test_provisioning()
+	await _test_capacity_limits()
 	await _test_reservations()
 	await _test_bounded_parsing()
 	await _test_signed_hello()
@@ -53,6 +59,7 @@ func _run() -> void:
 	await _test_full_time_spool()
 	await _test_rejected_result()
 	await _test_restart_recovery()
+	await _test_lobby_client()
 	runtime.stop()
 	fake_results.stop()
 	_wipe(DATA_DIR)
@@ -408,3 +415,114 @@ func _test_restart_recovery() -> void:
 	_check((await _http("GET", "/internal/v1/matches/hello-1")).status == 404, "live matches don't survive a restart (404)")
 	results_status = 200
 	_check(await _frames_until(func() -> bool: return not runtime.spool.is_pending("pending-1"), 4000), "the recovered result is delivered")
+
+func _test_capacity_limits() -> void:
+	var rooms_cap := runtime.max_rooms
+	runtime.max_rooms = runtime.rooms().size()
+	_check((await _provision("cap-1")).status == 503 and runtime.room("cap-1") == null,
+			"provisioning past max_rooms (RUNTIME_MAX_ROOMS) is refused with 503")
+	runtime.max_rooms = rooms_cap
+	var conns_cap := runtime.max_connections
+	runtime.max_connections = runtime.connection_count()
+	var ws := WebSocketPeer.new()
+	ws.connect_to_url("ws://127.0.0.1:%d/ws/game/cap-1" % WS_PORT)
+	var closed := func() -> bool:
+		ws.poll()
+		return ws.get_ready_state() == WebSocketPeer.STATE_CLOSED
+	_check(await _frames_until(closed, 3000) and runtime.connection_count() == runtime.max_connections,
+			"a connection past max_connections (RUNTIME_MAX_CONNECTIONS) is closed on accept")
+	runtime.max_connections = conns_cap
+
+# --- LobbyClient against a fake lobby ------------------------------------------------
+
+func _fake_lobby_handler(method: String, path: String, _headers: Dictionary, body: PackedByteArray) -> Dictionary:
+	var json = JSON.parse_string(body.get_string_from_utf8()) if body.size() > 0 else null
+	lobby_requests.append({"method": method, "path": path, "body": json})
+	match path:
+		"/api/lobby/v1/rooms":
+			return {"status": 201, "body": {"room_code": "ABC234", "match_id": "m-1", "team": 0, "token": "tok",
+					"ws_url": "/ws/game/m-1", "player_id": "p-1", "nickname": json.nickname}}
+		"/api/lobby/v1/rooms/NOPE22/join":
+			return {"status": 404, "body": {"error": "room_not_found", "detail": "no room with that code"}}
+		"/api/lobby/v1/rooms/BUSY22/join":
+			return {"status": 503, "body": {"error": "runtime_unavailable", "detail": "retry with the same request_id"}}
+		"/api/stats/v1/leaderboard":
+			return {"status": 200, "body": {"items": [{"rank": 1, "nickname": "Ana", "points": 3, "wins": 1, "draws": 0,
+					"losses": 0, "goal_diff": 2, "goals_for": 2, "player_id": "p-1"}], "next_cursor": null}}
+	return {"status": 404, "body": {"error": "not_found"}}
+
+## Runs one LobbyClient coroutine to completion while polling the fake lobby.
+func _lobby_call(fn: Callable) -> Dictionary:
+	var box := {}
+	var run := func() -> void: box["r"] = await fn.call()
+	run.call()
+	var t0 := Time.get_ticks_msec()
+	while not box.has("r") and Time.get_ticks_msec() - t0 < 12000:
+		await process_frame
+		fake_lobby.poll()
+	return box.get("r", {})
+
+func _last_request_id() -> String:
+	return str(lobby_requests.back().body.get("request_id", "")) if not lobby_requests.is_empty() else ""
+
+func _test_lobby_client() -> void:
+	fake_lobby = ControlServer.new()
+	fake_lobby.handler = _fake_lobby_handler
+	_check(fake_lobby.listen(LOBBY_PORT, "127.0.0.1") == OK, "fake lobby listens")
+	var lobby := LobbyClient.new()
+	lobby.base_url = "http://127.0.0.1:%d/api/lobby/v1" % LOBBY_PORT
+	root.add_child(lobby)
+	var created := await _lobby_call(func() -> Dictionary: return await lobby.create_room("Ana", 30))
+	var sent: Dictionary = lobby_requests.back().body if not lobby_requests.is_empty() else {}
+	_check(created.get("ok", false) and created.status == 201 and created.body.room_code == "ABC234",
+			"create_room returns the lobby's grant")
+	_check(sent.get("nickname") == "Ana" and int(sent.get("half_length_s", 0)) == 30 and not sent.has("player_id")
+			and RegEx.create_from_string("^[A-Za-z0-9_-]{8,64}$").search(str(sent.get("request_id", ""))) != null,
+			"create_room sends nickname, half length and a valid request_id")
+	_check(lobby.ws_url("/ws/game/m-1") == "ws://127.0.0.1:%d/ws/game/m-1" % LOBBY_PORT
+			and lobby.stats_base_url() == "http://127.0.0.1:%d/api/stats/v1" % LOBBY_PORT,
+			"the WebSocket and stats URLs derive from the lobby origin")
+	var secure := LobbyClient.new()
+	secure.base_url = "https://game.example.com/api/lobby/v1"
+	_check(secure.ws_url("/ws/game/x") == "wss://game.example.com/ws/game/x", "an https lobby gives a wss match URL")
+	secure.free()
+	var missing := await _lobby_call(func() -> Dictionary: return await lobby.join_room("NOPE22", "Bia"))
+	var first_missing_id := _last_request_id()
+	_check(not missing.get("ok", true) and missing.status == 404 and missing.error == "room_not_found"
+			and LobbyClient.describe(missing) == "No room with that code.", "an unknown room maps to room_not_found")
+	await _lobby_call(func() -> Dictionary: return await lobby.join_room("BUSY22", "Bia"))
+	var busy_id := _last_request_id()
+	var retry := await _lobby_call(func() -> Dictionary: return await lobby.join_room("BUSY22", "Bia"))
+	_check(retry.error == "runtime_unavailable" and _last_request_id() == busy_id,
+			"a join retried after runtime_unavailable reuses its request_id")
+	await _lobby_call(func() -> Dictionary: return await lobby.join_room("NOPE22", "Bia"))
+	_check(_last_request_id() != first_missing_id and _last_request_id() != busy_id,
+			"a definitive answer retires the request_id")
+	var board := await _lobby_call(func() -> Dictionary: return await lobby.leaderboard(5))
+	_check(board.get("ok", false) and OnlineMenu.format_board(board).begins_with("1. Ana   3 pts"),
+			"leaderboard() reads the stats API and formats for the menu")
+	var both := {}
+	var first_call := func() -> void: both["a"] = await lobby.leaderboard(5)
+	first_call.call()
+	var second: Dictionary = await lobby.leaderboard(5)
+	_check(second.error == "busy", "a second call while one is in flight is refused as busy")
+	var wait_first := func() -> Dictionary:
+		while not both.has("a"):
+			await process_frame
+		return both.a
+	_check((await _lobby_call(wait_first)).get("ok", false), "the first call still completes")
+	var offline := LobbyClient.new()
+	offline.base_url = "http://127.0.0.1:1/api/lobby/v1"
+	root.add_child(offline)
+	var down := await _lobby_call(func() -> Dictionary: return await offline.create_room("Ana", 120))
+	_check(down.get("error") == "network" and down.status == 0 and LobbyClient.describe(down).begins_with("Cannot reach"),
+			"an unreachable lobby is a network error")
+	var invalid := LobbyClient.parse_response(HTTPRequest.RESULT_SUCCESS, 422,
+			JSON.stringify({"error": "invalid_request", "detail": [{"field": "nickname", "message": "too long"}]}).to_utf8_buffer())
+	_check(invalid.error == "invalid_request" and invalid.message == "nickname: too long", "a 422 carries the first field problem")
+	_check(LobbyClient.parse_response(HTTPRequest.RESULT_SUCCESS, 502, PackedByteArray()).error == "unavailable"
+			and LobbyClient.parse_response(HTTPRequest.RESULT_SUCCESS, 200, "<html>".to_utf8_buffer()).error == "bad_response",
+			"gateway errors and non-JSON answers are mapped")
+	lobby.queue_free()
+	offline.queue_free()
+	fake_lobby.stop()

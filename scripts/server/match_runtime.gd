@@ -6,7 +6,7 @@ extends Node
 ##
 ## Connection lifecycle (ws://<host>:<port>/ws/game/<match_id>, behind the
 ## gateway wss://<domain>/ws/game/<match_id>):
-##   1. TCP accept (capped at MAX_CONNECTIONS), WebSocket handshake within
+##   1. TCP accept (capped at `max_connections`), WebSocket handshake within
 ##      HANDSHAKE_TIMEOUT_MS, path must be /ws/game/<id>.
 ##   2. The first message must be HELLO{token} within HELLO_TIMEOUT_MS. The
 ##      token must name this match and a team; the peer is then attached to
@@ -40,6 +40,8 @@ signal peer_opened(peer_id: int, match_id: String)
 signal peer_closed(peer_id: int)
 
 const DEFAULT_PORT := 8910
+# Defaults of the capacity limits; server_main overrides them from the
+# environment (RUNTIME_MAX_CONNECTIONS, RUNTIME_MAX_ROOMS).
 const MAX_CONNECTIONS := 64
 const MAX_ROOMS := 32
 const HANDSHAKE_TIMEOUT_MS := 5000
@@ -55,6 +57,11 @@ const CLOSE_BAD_MESSAGE := NetProtocol.CLOSE_BAD_MESSAGE
 const TERMINAL_MIN_RETENTION_S := 3600
 const PRUNE_INTERVAL_MS := 60000
 
+## Open player connections (any state) and live rooms (provisioned or dev)
+## this process accepts; over the limit a connection is closed on accept and
+## a provisioning request is answered 503.
+var max_connections := MAX_CONNECTIONS
+var max_rooms := MAX_ROOMS
 var allow_dev_tokens := false
 var dev_config := MatchConfig.new()
 var match_secret := PackedByteArray()
@@ -149,7 +156,7 @@ func _physics_process(delta: float) -> void:
 func poll() -> void:
 	while _tcp.is_connection_available():
 		var conn := _tcp.take_connection()
-		if _peers.size() >= MAX_CONNECTIONS:
+		if _peers.size() >= max_connections:
 			conn.disconnect_from_host()
 			log_event("connection_refused", {"reason": "capacity"})
 			continue
@@ -236,7 +243,7 @@ func _on_hello(id: int, token: String) -> void:
 		return
 	var r: MatchRoom = _rooms.get(match_id)
 	if r == null:   # only dev tokens get here: create the room on first use
-		if _rooms.size() >= MAX_ROOMS:
+		if _rooms.size() >= max_rooms:
 			_drop(id, NetProtocol.CLOSE_MATCH_OVER, "runtime at capacity")
 			return
 		r = MatchRoom.new(match_id, dev_config, randi(), send_to, close_peer)
