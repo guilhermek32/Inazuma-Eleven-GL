@@ -13,7 +13,10 @@ C++/OpenGL build remains in the repo as a legacy reference.
 
 - 11-v-11 match with a user team (red) and a full-AI team (blue), in a 4-3-3 formation.
 - Night stadium: broadcast camera, four floodlight masts, a moon fill light, baked
-  global illumination, ACES tonemapping, bloom, SSAO/SSIL and volumetric fog.
+  global illumination, ACES tonemapping, bloom, SSAO/SSIL and volumetric fog (a lighter
+  web tier on the browser's Compatibility renderer, see "Online play").
+- Online two-player matches from the in-game **Play Online** menu (room codes), run on an
+  authoritative match server behind a lobby and a results service.
 - Animated GLB players (Mixamo-rigged) with idle / run / kick / receive / tackle clips
   and per-team kit tinting; a procedural box-figure fallback if a model fails to load.
 - Ball possession, passing, tackling, charged shots, special-shot glow, goal detection,
@@ -78,8 +81,11 @@ scripts/
     match_config.gd           #   immutable gameplay rules of one match (wire-serializable)
     match_session.gd          #   clock, halves, goal freeze, slow-mo, events around the sim
   server/                     # headless match runtime: listener, rooms, remote input queue
-  net/                        # wire protocol, network client, snapshot interpolation
+  net/                        # wire protocol, network client, snapshot interpolation,
+                              #   lobby_client.gd (lobby + stats HTTP), latency_probe.gd
   config/game_config.gd       # constants, enums, to_3d() coordinate helper
+  config/launch_args.gd       # -- --name=value (desktop) / ?name=value (web) options
+  config/render_tier.gd       # FULL (Forward+) or WEB (Compatibility) visual tier
   data/                       # plain state: PlayerState, BallState, InputSnapshot, VfxParticle
   build/                      # one-shot scene construction
     material_factory.gd       #   materials + procedural textures
@@ -94,6 +100,7 @@ scripts/
     match_setup.gd            #   pre-match device-to-side assignment
     settings_store.gd         #   settings + input actions + persistence
     menu_manager.gd           #   menus (main / howto / settings / pause / full-time)
+    online_menu.gd            #   Play Online: create / join / waiting room / stats
     match_hud.gd              #   broadcast scoreboard
     audio_manager.gd          #   music + SFX buses
 ```
@@ -183,14 +190,15 @@ optional `SITE_ADDRESS` / `GATEWAY_HTTP_PORT` / `GATEWAY_HTTPS_PORT`. The runtim
 reads `MATCH_RUNTIME_PORT`, `RUNTIME_CONTROL_PORT`, `RESULTS_URL` and
 `RUNTIME_DATA_DIR`, which the compose file sets.
 
-End-to-end checks against the running stack (Playwright container in the gateway's
-network namespace, so the page is served from `localhost`):
+End-to-end checks against the running stack. `tests/e2e/run.sh` runs a script in the
+Playwright image inside the gateway's network namespace (so the page is served from
+`localhost`, a secure context) and keeps `node_modules` in a Docker volume:
 
 ```bash
-MSYS_NO_PATHCONV=1 docker run --rm --network container:inazuma-online-gateway-1 \
-  -v "$(pwd -W)/tests/e2e:/e2e" -w /e2e mcr.microsoft.com/playwright:v1.63.0-noble \
-  sh -c "npm i --silent --no-save playwright@1.63.0 && node lobby_match.mjs http://localhost"
-bash tests/e2e/run_failure_checks.sh   # results down at full time; runtime restart mid-match
+bash tests/e2e/run.sh online_menu.mjs   # two browsers: Play Online menu -> match -> results
+bash tests/e2e/run.sh lobby_match.mjs   # lobby API grants -> play_url -> results
+bash tests/e2e/run.sh netprobe.mjs      # web build boots on Compatibility, WebSocket path
+bash tests/e2e/run_failure_checks.sh    # results down at full time; runtime restart mid-match
 ```
 
 - `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket
@@ -206,8 +214,103 @@ bash tests/e2e/run_failure_checks.sh   # results down at full time; runtime rest
   `http://localhost:8080/?match=test1&token=dev:1` (blue); `tests/e2e/two_players.mjs`
   automates this. Never deploy it.
 
-The in-game lobby menu (create/join from the game UI) is the next milestone; until
-then rooms are created through the lobby API and opened through `play_url`.
+### Playing online from the game
+
+**Play Online** in the main menu talks to the lobby through the gateway:
+
+- **Create Room**: enter a nickname, pick the half length (30 s, 2, 5 or 10 min) and
+  create. The waiting page shows the six-character room code; share it. The match starts
+  as soon as the opponent joins. `Esc`/Cancel leaves the waiting room.
+- **Join Room**: enter a nickname and the code, then Join. Unknown codes, full or closed
+  rooms and an unavailable match server are reported on the same screen.
+- **Recent Matches & Leaderboard** reads `/api/stats/v1`.
+- In a match, `Esc` leaves. Keyboard+mouse or any connected pad drives your team: whichever
+  device you used last. Full time offers **New Online Match** and **Back to Menu**.
+
+The web build uses the page's own origin (`/api/lobby/v1`, `wss://<host>/ws/game/<id>`).
+A desktop build reads the lobby from a launch argument:
+
+```bash
+godot-4 --path . -- --lobby=http://localhost:8080/api/lobby/v1
+```
+
+The nickname, the guest `player_id` the lobby issued (so a returning guest keeps one
+leaderboard row) and the last half length are saved with the other settings. The old
+`/?match=<id>&token=<credential>` links (`play_url`) still work.
+
+On the web the renderer is Compatibility (WebGL 2), so the stadium uses its **web quality
+tier**: no SSAO, SSIL, volumetric fog or VoxelGI (none exist there; skipping VoxelGI also
+skips its bake at load), compensated with more ambient fill, depth fog and glow, two
+shadowed floodlights instead of four and a thinner crowd. The desktop Forward+ look is
+unchanged. `?quality=full` / `?quality=web` (desktop: `-- --quality=...`) overrides the
+choice. Text fields take physical-keyboard input in desktop browsers. Mobile browsers
+aren't a target (no touch controls), so the export's virtual keyboard stays off.
+
+Latency, bandwidth and browser frame-time numbers, and how they were measured, are in
+[`docs/measurements.md`](docs/measurements.md).
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request, with no repository
+secrets: the pinned Godot toolchain image (cached), `--import` and all five Godot suites;
+the credential-vector check and both pytest suites; then, with a generated throwaway
+`.env`, `docker compose build` (which runs the Web and Linux Server exports), the stack,
+and the `netprobe`, `online_menu` and `lobby_match` browser e2e scripts.
+
+---
+
+## Deploying on one VPS
+
+The whole stack runs on a single Linux host with Docker Engine and the Compose plugin
+(2 vCPU and 2 GB RAM is plenty for a handful of matches; the match runtime simulates
+every room on one thread).
+
+1. **DNS.** Create an `A` (and `AAAA` if you have IPv6) record pointing your domain,
+   e.g. `game.example.com`, at the server.
+2. **Firewall.** Allow inbound TCP 22 (SSH), 80 and 443 only. With `ufw`:
+   `ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable`.
+   Nothing else is published: lobby, results, runtime and PostgreSQL sit on an internal
+   Docker network with no route out. (Docker-published ports bypass `ufw`'s INPUT rules,
+   so don't publish anything else.)
+3. **Configuration.** Clone the repo and `cp .env.example .env`, then set:
+   - every secret to a fresh value (`openssl rand -hex 32`; database passwords
+     URL-safe),
+   - `SITE_ADDRESS=game.example.com`: Caddy obtains a Let's Encrypt certificate and
+     redirects HTTP to HTTPS (ports 80/443 must be reachable for the ACME challenge),
+   - `GATEWAY_HTTP_PORT=80` and `GATEWAY_HTTPS_PORT=443`,
+   - optionally `RUNTIME_MAX_CONNECTIONS` / `RUNTIME_MAX_ROOMS` (defaults 64 / 32).
+4. **Start.** `docker compose up --build -d`, then `docker compose ps` should show every
+   service `healthy`. The gateway's healthcheck uses an internal listener
+   (`127.0.0.1:8081/healthz`) that works in both HTTP and HTTPS modes. Open
+   `https://game.example.com/?netprobe` to check the WebSocket path.
+5. **Logs.** Every container writes JSON lines to Docker's `json-file` driver, rotated
+   at 5 x 10 MB per container: `docker compose logs -f lobby match-runtime`.
+
+**State and backups.** Three named volumes hold everything worth keeping:
+
+| Volume | Contents | Backup |
+| --- | --- | --- |
+| `inazuma-online_postgres-data` | lobby + results databases | `docker compose exec -T postgres pg_dumpall -U postgres \| gzip > backup-$(date +%F).sql.gz` (restore: `gunzip -c ... \| docker compose exec -T postgres psql -U postgres`) |
+| `inazuma-online_runtime-data` | terminal-match registry, undelivered results (`spool/`) | `docker run --rm -v inazuma-online_runtime-data:/data -v "$PWD:/out" alpine tar czf /out/runtime-$(date +%F).tgz -C /data .` |
+| `inazuma-online_caddy-data` | TLS certificates and ACME account | optional (Caddy re-issues), same `tar` pattern |
+
+Run the dumps from cron (e.g. nightly) and copy them off the host.
+
+**Upgrading.**
+
+```bash
+git pull
+docker compose build                    # new images; the running stack is untouched
+docker compose up -d                    # recreates only the changed containers
+docker compose ps                       # wait for healthy
+docker image prune -f
+```
+
+Recreating the match runtime ends the matches in progress: the lobby reports them
+`aborted`, and results already in the spool are delivered after the restart. Upgrade
+between matches if you can (`docker compose logs --since 15m match-runtime` shows live
+rooms). The services create or update their database schema on start; take a
+`pg_dumpall` before upgrading.
 
 ---
 
