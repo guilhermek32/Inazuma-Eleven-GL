@@ -42,9 +42,9 @@ const AMBIENT_ENERGY_RAIN := 0.28
 # glow keeps the floodlamps and neon boards reading as light sources.
 const WEB_AMBIENT_ENERGY_CLEAR := 0.62
 const WEB_AMBIENT_ENERGY_RAIN := 0.46
-const WEB_FOG_DENSITY_CLEAR := 0.0045
-const WEB_FOG_DENSITY_RAIN := 0.0075
-const WEB_FOG_COLOR := Color(0.16, 0.19, 0.25)
+const WEB_FOG_DENSITY_CLEAR := 0.0035
+const WEB_FOG_DENSITY_RAIN := 0.006
+const WEB_FOG_COLOR := Color(0.22, 0.25, 0.31)
 const WEB_GLOW_INTENSITY := 0.8
 const WEB_GLOW_BLOOM := 0.25
 # Only these towers cast shadows on the web (the far pair: their shadows fall
