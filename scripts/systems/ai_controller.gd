@@ -213,147 +213,32 @@ func _decide_owner_action(p: PlayerState, team: Array[PlayerState], opponents: A
 	return false
 
 ## Aims at the corner away from the keeper's current position, with a
-## difficulty-scaled error. Public for the headless tests.
+## difficulty-scaled error drawn from sim.rng. Public for the headless tests.
 func pick_shot_target(p: PlayerState, opponents: Array[PlayerState], target_goal_x: float, aim_error: float) -> Vector2:
-	var corner := GameConfig.GOAL_HALF_WIDTH * 0.7
-	var keeper := _opposing_keeper(opponents)
-	var aim_y := -corner if keeper != null and keeper.y > 0.0 else corner
-	aim_y += sim.rng.randf_range(-1.0, 1.0) * aim_error
-	return Vector2(target_goal_x, clampf(aim_y, -GameConfig.GOAL_HALF_WIDTH * 0.85, GameConfig.GOAL_HALF_WIDTH * 0.85))
+	return Tactics.shot_target(opponents, target_goal_x, sim.rng.randf_range(-1.0, 1.0) * aim_error)
+
+# The read-only queries below live in Tactics (shared with the online bot);
+# these wrappers keep AIController's public surface and bind the live ball.
 
 func _opposing_keeper(opponents: Array[PlayerState]) -> PlayerState:
-	for opp in opponents:
-		if opp.role == GameConfig.PlayerRole.GOALKEEPER:
-			return opp
-	return null
+	return Tactics.opposing_keeper(opponents)
 
-## Samples a fan of forward directions and returns the most open one:
-## clearance = distance from a probe point ahead to the nearest opponent.
 func _best_dribble(p: PlayerState, opponents: Array[PlayerState], goal_dir: Vector2) -> Dictionary:
-	var best_dir := goal_dir
-	var best_clearance := -INF
-	for i in GameConfig.AI_DRIBBLE_SAMPLES:
-		var angle := lerpf(-1.0, 1.0, float(i) / float(GameConfig.AI_DRIBBLE_SAMPLES - 1))
-		var dir := goal_dir.rotated(angle)
-		var probe := Vector2(p.x, p.y) + dir * 0.18
-		var clearance := INF
-		for opp in opponents:
-			clearance = minf(clearance, Vector2(opp.x - probe.x, opp.y - probe.y).length())
-		# Prefer open lanes, but discount ones that turn away from goal.
-		clearance -= absf(angle) * 0.04
-		if clearance > best_clearance:
-			best_clearance = clearance
-			best_dir = dir
-	return {"dir": best_dir, "clearance": clampf(best_clearance, 0.0, 0.4)}
+	return Tactics.best_dribble(p, opponents, goal_dir)
 
 func best_pass_target(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], target_goal_x: float) -> PlayerState:
-	var best: PlayerState = null
-	var best_score := -999.0
-	var from := Vector2(p.x, p.y)
-	var owner_goal_dist := Vector2(target_goal_x - p.x, -p.y).length()
-	for mate in team:
-		if mate == p or mate.role == GameConfig.PlayerRole.GOALKEEPER:
-			continue
-		var to := Vector2(mate.x, mate.y)
-		var mate_goal_dist := Vector2(target_goal_x - mate.x, -mate.y).length()
-		# Backward/square passes are allowed (they recycle possession under
-		# pressure) but penalised so forward options win when available.
-		var backward_penalty := GameConfig.PASS_BACKWARD_PENALTY if mate_goal_dist >= owner_goal_dist else 0.0
-		var open := true
-		for opp in opponents:
-			var opp_pos := Vector2(opp.x, opp.y)
-			if opp_pos.distance_to(to) < GameConfig.PASS_OPENNESS_RADIUS:
-				open = false
-				break
-			# An opponent standing on the passing lane intercepts the ball.
-			if Geometry2D.get_closest_point_to_segment(opp_pos, from, to).distance_to(opp_pos) < GameConfig.PASS_LANE_RADIUS:
-				open = false
-				break
-		if not open:
-			continue
-		var role_bonus := 4.0 if mate.role == GameConfig.PlayerRole.ATTACKER else (2.0 if mate.role == GameConfig.PlayerRole.MIDFIELDER else 0.0)
-		# Reward receivers making a run toward goal (through balls onto the led
-		# pass) and receivers already in shooting territory.
-		var goal_dir := Vector2(target_goal_x - mate.x, -mate.y).normalized()
-		var runner_bonus: float = maxf(0.0, Vector2(mate.vel_x, mate.vel_y).dot(goal_dir)) * GameConfig.PASS_RUNNER_BONUS
-		var box_bonus: float = GameConfig.PASS_BOX_BONUS if mate_goal_dist < 0.4 else 0.0
-		var candidate := role_bonus + runner_bonus + box_bonus - backward_penalty + 1.0 / (1.0 + from.distance_to(to))
-		if candidate > best_score:
-			best_score = candidate
-			best = mate
-	return best
+	return Tactics.best_pass_target(p, team, opponents, target_goal_x)
 
-## Picks an off-ball run destination: three channel candidates ahead of the
-## player, scored by opponent clearance minus travel cost; attackers are capped
-## just short of the offside line. Public for the headless tests.
+## Off-ball run destination (see Tactics.run_target). Public for the headless tests.
 func pick_run_target(p: PlayerState, opponents: Array[PlayerState], attack_dir: float) -> Vector2:
-	var line := sim.second_defender_line(opponents, attack_dir)
-	var max_depth := minf(line - 0.02, GameConfig.FIELD_BOUNDARY_X - 0.06)
-	var depth := clampf(p.x * attack_dir + 0.18, 0.05, max_depth)
-	var best := Vector2(p.start_x, p.start_y)
-	var best_score := -INF
-	for ch in [-0.45, 0.0, 0.45]:
-		var cand := Vector2(depth * attack_dir, ch)
-		var clearance := INF
-		for opp in opponents:
-			clearance = minf(clearance, Vector2(opp.x - cand.x, opp.y - cand.y).length())
-		var score: float = clearance - Vector2(cand.x - p.x, cand.y - p.y).length() * 0.5
-		if score > best_score:
-			best_score = score
-			best = cand
-	return best
+	return Tactics.run_target(p, opponents, attack_dir)
 
-## Goal-side marking spot when this player is the designated marker of one of
-## the two most dangerous opponents (those between the ball and our goal,
-## nearest our goal first). Returns (INF, INF) when this player marks nobody —
-## only defenders mark, and the nearest defender to each danger gets the job.
+## Goal-side marking spot, or (INF, INF) (see Tactics.mark_target_for).
 func mark_target_for(p: PlayerState, team: Array[PlayerState], opponents: Array[PlayerState], player_idx: int) -> Vector2:
-	var no_mark := Vector2(INF, INF)
-	if p.role != GameConfig.PlayerRole.DEFENDER:
-		return no_mark
-	var side := float(p.side)
-	# Dangerous: goal-side of the ball, ranked by proximity to our goal line.
-	var dangers: Array[PlayerState] = []
-	for opp in opponents:
-		if opp.role == GameConfig.PlayerRole.GOALKEEPER:
-			continue
-		if opp.x * side > sim.ball.x * side:
-			dangers.append(opp)
-	dangers.sort_custom(func(a: PlayerState, b: PlayerState) -> bool: return a.x * side > b.x * side)
-	var own_goal := Vector2(side * GameConfig.FIELD_BOUNDARY_X, 0.0)
-	for n in mini(2, dangers.size()):
-		var danger := dangers[n]
-		# The nearest defender (lowest index on ties) is that danger's marker.
-		var marker := -1
-		var marker_dist := INF
-		for i in team.size():
-			if team[i].role != GameConfig.PlayerRole.DEFENDER:
-				continue
-			var d := Vector2(team[i].x - danger.x, team[i].y - danger.y).length()
-			if d < marker_dist:
-				marker_dist = d
-				marker = i
-		if marker == player_idx:
-			var danger_pos := Vector2(danger.x, danger.y)
-			return danger_pos + (own_goal - danger_pos).normalized() * GameConfig.AI_MARK_DIST
-	return no_mark
+	return Tactics.mark_target_for(p, team, opponents, player_idx, sim.ball.x)
 
 func _is_presser(team: Array[PlayerState], player_idx: int, press_limit: int) -> bool:
-	var my_dist := Vector2(team[player_idx].x - sim.ball.x, team[player_idx].y - sim.ball.y).length()
-	var closer := 0
-	for i in team.size():
-		if i == player_idx or team[i].role == GameConfig.PlayerRole.GOALKEEPER:
-			continue
-		var d := Vector2(team[i].x - sim.ball.x, team[i].y - sim.ball.y).length()
-		# Strictly nearer wins; on a near-tie the lower index wins. Without this both
-		# equidistant players think they're the sole presser, charge the ball together
-		# and deadlock flanking it just out of capture range.
-		var ahead := d < my_dist - PRESS_TIE_EPS or (absf(d - my_dist) <= PRESS_TIE_EPS and i < player_idx)
-		if ahead:
-			closer += 1
-			if closer >= press_limit:
-				return false
-	return true
+	return Tactics.is_presser(team, player_idx, press_limit, Vector2(sim.ball.x, sim.ball.y), PRESS_TIE_EPS)
 
 func _ball_in_own_third(side: int) -> bool:
 	return sim.ball.x * float(side) > 0.58

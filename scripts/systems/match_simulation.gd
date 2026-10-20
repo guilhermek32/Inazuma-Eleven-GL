@@ -646,12 +646,7 @@ func _shot_on_target(p: PlayerState) -> bool:
 ## Depth (in `attack`-direction units, bigger = deeper) of the defending side's
 ## second-to-last man — the offside line, also used by AI runs to stay onside.
 func second_defender_line(defenders: Array[PlayerState], attack: float) -> float:
-	var depths: Array[float] = []
-	for opp in defenders:
-		depths.append(opp.x * attack)
-	depths.sort()
-	depths.reverse()
-	return depths[1] if depths.size() >= 2 else 0.0
+	return Tactics.second_defender_line(defenders, attack)
 
 func _flag_offside_receivers(kicker: PlayerState) -> void:
 	offside_team = kicker.team_index
