@@ -6,7 +6,9 @@ extends Node
 ## in-game online menu (OnlineMenu); add it to the tree before calling.
 ##
 ## Endpoints (base_url = <origin>/api/lobby/v1, stats = <origin>/api/stats/v1):
-##   create_room   POST /rooms               {nickname, half_length_s, request_id, player_id?}
+##   create_room   POST /rooms               {nickname, half_length_s, request_id, player_id?,
+##                                            mode? ("vs_ai" + difficulty: the AI bot is already
+##                                            seated on team 1 when the reply arrives)}
 ##   join_room     POST /rooms/{code}/join   {nickname, request_id, player_id?}
 ##   room_status   GET  /rooms/{code}
 ##   recent_matches / leaderboard   GET <stats>/matches/recent, <stats>/leaderboard
@@ -16,7 +18,7 @@ extends Node
 ## Every call is a coroutine (use await) returning a reply:
 ##   {ok: bool, status: int (0 = no HTTP answer), error: String, message: String, body: Dictionary}
 ## `error` is the lobby's own code ("room_not_found", "room_full", "room_closed",
-## "runtime_unavailable", "invalid_request", "player_not_found", ...) or a local
+## "runtime_unavailable", "bot_unavailable", "invalid_request", "player_not_found", ...) or a local
 ## one: "network" (no answer: timeout, DNS, refused), "unavailable" (502-504
 ## from the gateway), "bad_response" (not JSON), "busy" (a call is in flight;
 ## calls are not queued). describe() turns a reply into a player-facing line.
@@ -27,7 +29,8 @@ extends Node
 ## reservation instead of finding the room full of our own half-made seat.
 
 const DEFAULT_DESKTOP_BASE := "http://localhost:8080/api/lobby/v1"
-const TIMEOUT_S := 10.0
+# A vs-AI creation waits for the bot to join (the lobby gives it up to 12 s).
+const TIMEOUT_S := 20.0
 const RETRYABLE := ["network", "runtime_unavailable", "unavailable"]
 
 var base_url := ""
@@ -72,11 +75,15 @@ func stats_base_url() -> String:
 func is_busy() -> bool:
 	return _busy
 
-func create_room(nickname: String, half_length_s: int, player_id := "") -> Dictionary:
+## `difficulty` non-empty creates a vs-AI room ("easy" / "normal" / "hard").
+func create_room(nickname: String, half_length_s: int, player_id := "", difficulty := "") -> Dictionary:
 	var body := {"nickname": nickname, "half_length_s": half_length_s}
 	if player_id != "":
 		body["player_id"] = player_id
-	return await _post_idempotent("create|%s|%d|%s" % [nickname, half_length_s, player_id], base_url + "/rooms", body)
+	if difficulty != "":
+		body["mode"] = "vs_ai"
+		body["difficulty"] = difficulty
+	return await _post_idempotent("create|%s|%d|%s|%s" % [nickname, half_length_s, player_id, difficulty], base_url + "/rooms", body)
 
 func join_room(code: String, nickname: String, player_id := "") -> Dictionary:
 	var body := {"nickname": nickname}
@@ -105,6 +112,8 @@ static func describe(reply: Dictionary) -> String:
 			return "That room is no longer open."
 		"runtime_unavailable", "unavailable":
 			return "The match server is unavailable. Try again in a moment."
+		"bot_unavailable":
+			return "The AI opponent is unavailable right now. Try again, or play a friend."
 		"invalid_request":
 			return "Check the nickname (1-16 letters, digits, space, _ . -) and the room code."
 		"network":

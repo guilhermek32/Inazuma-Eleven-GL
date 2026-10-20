@@ -4,22 +4,29 @@ extends Node
 ## The "Play Online" screens (GameState.ONLINE), one panel in MenuManager's
 ## menu layer with three pages:
 ##   home     nickname, half length, Create room; room code + Join room;
-##            Recent matches & leaderboard; Back. One status line shows
-##            progress and errors (LobbyClient.describe()).
+##            AI level + Play vs AI (online); Recent matches & leaderboard;
+##            Back. One status line shows progress and errors
+##            (LobbyClient.describe()).
 ##   waiting  the created room's code, "waiting for opponent", Cancel.
 ##   stats    recent matches and the leaderboard from the results service.
 ## Create/join go through `lobby` (LobbyClient), then hand the grant to
 ## controller.start_online_from_lobby(); the controller enters the match on
 ## WELCOME (joiner) or on the kickoff event (creator, from the waiting page).
+## Play vs AI creates a "vs_ai" room: the lobby answers once the ai-bot
+## service's bot holds team 1, so the player goes straight into the match
+## (no waiting page) and kicks off on connecting.
 ## A reply that arrives after the player left the page is ignored (the room
 ## then expires on the runtime's waiting deadline).
 ##
 ## Console lines for automation: "[online] room created <code> (match <id>)",
-## "[online] joined room <code> (match <id>)", "[online] lobby error <code>:
+## "[online] joined room <code> (match <id>)", "[online] vs AI room created
+## <code> (match <id>, <level>)", "[online] lobby error <code>:
 ## <message>", and MenuManager.log_layout()'s "[ui] online_<page> ..." line.
 
 const HALF_LENGTHS := [30, 120, 300, 600]
 const HALF_LABELS := ["30 s", "2 min", "5 min", "10 min"]
+const AI_LEVELS := ["easy", "normal", "hard"]
+const AI_LABELS := ["Easy", "Normal", "Hard"]
 const NICKNAME_PATTERN := "^[A-Za-z0-9_.\\- ]{1,16}$"   # the lobby's own rule
 const CODE_LENGTH := 6
 const ERROR_COLOR := Color(1.0, 0.45, 0.4)
@@ -38,6 +45,7 @@ var recent_label: Label
 var board_label: Label
 var _pages := {}
 var _half_buttons: Array[Button] = []
+var _ai_buttons: Array[Button] = []
 var _action_buttons: Array[Button] = []
 var _nickname_re := RegEx.create_from_string(NICKNAME_PATTERN)
 
@@ -122,6 +130,8 @@ func _build_home() -> void:
 	code_edit.text_submitted.connect(func(_t: String) -> void: _on_join())
 	_row(vb, "Room code", code_edit)
 	_action_buttons.append(_button(vb, "Join Room", _on_join, "join"))
+	_row(vb, "AI level", _toggle_row(AI_LABELS, AI_LEVELS.find(settings.online_ai_difficulty), "ai_", AI_LEVELS, _ai_buttons))
+	_action_buttons.append(_button(vb, "Play vs AI (online)", _on_vs_ai, "vs_ai"))
 	_action_buttons.append(_button(vb, "Recent Matches & Leaderboard", func() -> void: show_page("stats"), "stats"))
 	_button(vb, "Back", back, "back")
 	status_label = Label.new()
@@ -198,6 +208,54 @@ func _on_join() -> void:
 	_show_status("Connecting to the match...", false)
 	_set_busy(true)   # until the match starts or the connection fails
 	controller.start_online_from_lobby(lobby.ws_url(reply.body.ws_url), reply.body.token, false)
+
+func _on_vs_ai() -> void:
+	var nick := _checked_nickname()
+	if nick == "" or lobby.is_busy():
+		return
+	var level := _ai_level()
+	_begin("Starting a match against the AI (%s)..." % level)
+	var reply: Dictionary = await lobby.create_room(nick, _half_length(), settings.online_player_id, level)
+	if reply.error == "player_not_found":
+		settings.online_player_id = ""
+		reply = await lobby.create_room(nick, _half_length(), "", level)
+	_set_busy(false)
+	if not _still_here("home"):
+		return
+	if not reply.ok:
+		_fail(reply)
+		return
+	settings.online_ai_difficulty = level
+	_remember(reply.body)
+	print("[online] vs AI room created %s (match %s, %s)" % [reply.body.room_code, reply.body.match_id, level])
+	_show_status("Connecting to the match...", false)
+	_set_busy(true)   # until the match starts or the connection fails
+	controller.start_online_from_lobby(lobby.ws_url(reply.body.ws_url), reply.body.token, false)
+
+func _ai_level() -> String:
+	for i in _ai_buttons.size():
+		if _ai_buttons[i].button_pressed:
+			return AI_LEVELS[i]
+	return "normal"
+
+## A row of mutually exclusive toggle buttons; `pressed` (or the middle one
+## when out of range) starts pressed. Their ui ids are id_prefix + ids[i].
+func _toggle_row(labels: Array, pressed: int, id_prefix: String, ids: Array, into: Array[Button]) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var group := ButtonGroup.new()
+	for i in labels.size():
+		var b := Button.new()
+		b.text = labels[i]
+		b.toggle_mode = true
+		b.button_group = group
+		b.custom_minimum_size = Vector2(96, 36)
+		b.add_theme_font_size_override("font_size", 18)
+		b.button_pressed = i == (pressed if pressed >= 0 and pressed < labels.size() else labels.size() / 2)
+		b.set_meta("ui_id", "%s%s" % [id_prefix, ids[i]])
+		row.add_child(b)
+		into.append(b)
+	return row
 
 func _load_stats() -> void:
 	if lobby.is_busy():

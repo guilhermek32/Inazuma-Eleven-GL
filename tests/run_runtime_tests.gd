@@ -479,6 +479,14 @@ func _test_lobby_client() -> void:
 	_check(sent.get("nickname") == "Ana" and int(sent.get("half_length_s", 0)) == 30 and not sent.has("player_id")
 			and RegEx.create_from_string("^[A-Za-z0-9_-]{8,64}$").search(str(sent.get("request_id", ""))) != null,
 			"create_room sends nickname, half length and a valid request_id")
+	await _lobby_call(func() -> Dictionary: return await lobby.create_room("Ana", 30, "", "hard"))
+	var vs_ai: Dictionary = lobby_requests.back().body
+	_check(vs_ai.get("mode") == "vs_ai" and vs_ai.get("difficulty") == "hard" and _last_request_id() != str(sent.get("request_id")),
+			"create_room with a difficulty asks for a vs-AI room (its own request_id)")
+	var no_bot := LobbyClient.parse_response(HTTPRequest.RESULT_SUCCESS, 503,
+			JSON.stringify({"error": "bot_unavailable", "detail": "x"}).to_utf8_buffer())
+	_check(no_bot.error == "bot_unavailable" and LobbyClient.describe(no_bot).begins_with("The AI opponent is unavailable"),
+			"bot_unavailable is reported to the player")
 	_check(lobby.ws_url("/ws/game/m-1") == "ws://127.0.0.1:%d/ws/game/m-1" % LOBBY_PORT
 			and lobby.stats_base_url() == "http://127.0.0.1:%d/api/stats/v1" % LOBBY_PORT,
 			"the WebSocket and stats URLs derive from the lobby origin")

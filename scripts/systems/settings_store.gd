@@ -30,6 +30,7 @@ var vol_sfx := 1.0
 var online_nickname := ""
 var online_player_id := ""       # lobby-issued guest UUID; "" until the first room
 var online_half_length := 120    # seconds per half for rooms this player creates
+var online_ai_difficulty := "normal"   # level of the online AI opponent (easy / normal / hard)
 var audio: AudioManager
 
 func apply() -> void:
@@ -75,6 +76,7 @@ func load_settings() -> void:
 		online_nickname = str(cfg.get_value("online", "nickname", online_nickname))
 		online_player_id = str(cfg.get_value("online", "player_id", online_player_id))
 		online_half_length = int(cfg.get_value("online", "half_length", online_half_length))
+		online_ai_difficulty = str(cfg.get_value("online", "ai_difficulty", online_ai_difficulty))
 	_apply_settings()
 
 func _save_settings() -> void:
@@ -93,6 +95,7 @@ func _save_settings() -> void:
 	cfg.set_value("online", "nickname", online_nickname)
 	cfg.set_value("online", "player_id", online_player_id)
 	cfg.set_value("online", "half_length", online_half_length)
+	cfg.set_value("online", "ai_difficulty", online_ai_difficulty)
 	cfg.save(GameConfig.SETTINGS_PATH)
 
 func setup_input_actions() -> void:
