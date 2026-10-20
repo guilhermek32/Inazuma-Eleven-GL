@@ -15,7 +15,7 @@ WSL 2, 16 logical CPUs, 16 GB).
 | --- | --- | --- |
 | 0 | Prerequisites | once |
 | 1 | Fresh checkout and secrets | 1 min |
-| 2 | Build and start the stack | 10-15 min the first time, under 1 min after |
+| 2 | Build and start the stack | about 1 min with Docker's cache warm; add the downloads (about 1.5 GB) on a new machine |
 | 3 | PvP: two browsers create, join and play | 2-3 min |
 | 4 | Result and leaderboard | 1 min |
 | 5 | Versus the AI | 2 min |
@@ -25,8 +25,9 @@ WSL 2, 16 logical CPUs, 16 GB).
 | 9 | The offline game still works | 2 min |
 | 10 | Test suites | 5-25 min, depending on how many you run |
 
-For a short live presentation, do steps 3-5 and 8-9 live and play the recordings or the
-scripted checks (`tests/e2e/run_failure_checks.sh`) for steps 6-7.
+For a short live presentation, do steps 3-5 and 8-9 by hand and run the scripted check
+`tests/e2e/run_failure_checks.sh` for steps 6-7 (it takes about 4 minutes, so start it
+before talking through the architecture).
 
 ## 0. Prerequisites
 
@@ -75,13 +76,21 @@ docker compose ps
 The first build downloads the pinned Godot 4.7.2 binary and export templates (checked
 against their SHA-512 sums), imports the project once, and runs both exports: the Web
 build for the gateway and the Linux Server build for the runtime and the bot. Later
-runs reuse the cache. `--wait` returns once every service is healthy. Without `-d`,
+runs reuse the cache. `--wait` returns once every service is healthy. On the development machine,
+with the base images cached, the whole build and start took 52 s; on a new machine add
+the downloads (the export templates alone are about 1 GB). Without `-d`,
 `docker compose up --build` stays in the foreground and streams every service's JSON
 logs.
 
 **Expected:** `docker compose ps` lists six containers, all `Up ... (healthy)`:
 `gateway` (ports `0.0.0.0:8080->80`, `0.0.0.0:8443->443`), `lobby`, `match-runtime`,
 `results`, `ai-bot` and `postgres`. Only the gateway shows ports.
+
+If this machine already ran the stack from another checkout with other secrets, its
+`postgres-data` volume still holds the old passwords. Either run `docker compose down
+-v` there first (this deletes that stack's data), or give this checkout its own project
+name with `export COMPOSE_PROJECT_NAME=inazuma-demo` before every `docker compose`
+command. The e2e scripts honour the same variable.
 
 Optional check of the browser -> gateway -> runtime path: open
 `http://localhost:8080/?netprobe` (or run `bash tests/e2e/run.sh netprobe.mjs`).
@@ -120,7 +129,7 @@ code.", and joining a room that is full or already finished gives "That room is 
 The same flow is automated (two headless Chromium pages that drive only the menu):
 
 ```bash
-bash tests/e2e/run.sh online_menu.mjs     # about 3-4 min; ends "E2E ONLINE MENU PASSED"
+bash tests/e2e/run.sh online_menu.mjs     # about 5 min; ends "E2E ONLINE MENU PASSED"
 ```
 
 ## 4. Result and leaderboard
@@ -220,12 +229,11 @@ The bot logs each state change and a sampled line for its decisions (at most one
 docker compose logs --no-color ai-bot | grep bot_decision | tail -5
 ```
 
-Expected, one JSON object per line (prefixed with `ai-bot-1  | `):
+Expected, one JSON object per line with sorted keys (prefixed with `ai-bot-1  | `),
+for example from the fresh-checkout verification run:
 
 ```json
-{"svc":"ai-bot","event":"bot_decision","match_id":"...","team":1,"difficulty":"hard","match_time":41.2,"half":1,
- "score":[0,1],"intent":"attack","action":"shoot","reason":"in range and facing goal","player":9,
- "features":{"dist_goal":0.41,"facing":0.93,"nearest_opp":0.21,"power":0.84,"aim":[-0.93,-0.07]},"unlogged":3}
+{"action":"pass","difficulty":"hard","event":"bot_decision","features":{"clearance":0.11,"dist_goal":0.93,"facing":1.0,"nearest_opp":0.1,"pass_gain":-0.1},"half":1,"intent":"attack","match_id":"26214c24-d3db-42bd-a04a-1d8ea5131f27","match_time":2.0,"player":5,"reason":"pressed with no open lane","score":[0,0],"svc":"ai-bot","team":1,"ts":"2026-10-20T18:45:56","unlogged":0}
 ```
 
 Point out the agent loop. `features` is what the bot observed, `intent` and `action`
@@ -236,7 +244,7 @@ the action counters. On PowerShell, use `| Select-String bot_decision` instead o
 Then show that the AI is optional:
 
 ```bash
-bash tests/e2e/run_bot_checks.sh    # about 3 min; ends "BOT CHECKS PASSED"
+bash tests/e2e/run_bot_checks.sh    # about 2 min; ends "BOT CHECKS PASSED"
 ```
 
 It plays a vs-AI match from the menu, then stops `ai-bot`. vs-AI creation now fails
@@ -282,8 +290,10 @@ G --fixed-fps 60 --script res://tests/run_scene_smoke.gd   # a full offline matc
 git checkout -- assets/                               # undo the LF rewrite of assets/*.import (Windows)
 ```
 
-Each suite prints `PASS` / `FAIL` lines and exits non-zero on failure. `run_sim_tests`
-takes a few seconds, the two smoke tests a few minutes.
+Each suite prints `PASS` / `FAIL` lines, ends with `ALL TESTS PASSED` (the smoke tests:
+`ONLINE SMOKE PASSED`, `SCENE SMOKE PASSED`) and exits non-zero on failure. Measured in a fresh clone: import 15 s, `run_sim_tests` 3 s, `run_net_tests`
+10 s, `run_runtime_tests` 15 s, `run_bot_tests` 14 s; the two smoke tests take a few
+minutes.
 
 Service suites (pytest against a throwaway PostgreSQL) and the credential vectors:
 
