@@ -1,0 +1,117 @@
+# Continuous integration: Godot suites, service suites, credential vectors,
+# both exports + every image, and the browser end-to-end flows against the
+# composed stack. Needs no repository secrets: the stack job generates a
+# throwaway .env.
+#
+# Every step is a command from README.md "Tests" / "Online play"; run them
+# locally the same way (Git Bash on Windows: add MSYS_NO_PATHCONV=1 and use
+# $(pwd -W)).
+
+name: CI
+
+on:
+  push:
+    branches: [3d-version, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_IMAGE: inazuma/godot:4.7.2
+
+jobs:
+  godot:
+    name: Godot suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # The pinned, checksum-verified engine (tools/godot/Dockerfile, target
+      # godot), cached between runs in the GitHub Actions cache.
+      - name: Build the Godot toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/godot
+          file: tools/godot/Dockerfile
+          target: godot
+          tags: ${{ env.GODOT_IMAGE }}
+          load: true
+          cache-from: type=gha,scope=godot-toolchain
+          cache-to: type=gha,scope=godot-toolchain,mode=max
+      - name: Import (compiles every script)
+        run: |
+          docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --import --path /project 2>&1 | tee import.log
+          ! grep -E "SCRIPT ERROR|Parse Error" import.log
+      - name: Simulation, config and session tests
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_sim_tests.gd
+      - name: Protocol and runtime-over-loopback tests
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_net_tests.gd
+      - name: Credentials, control API, spool and lobby client tests
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_runtime_tests.gd
+      - name: Online smoke (runtime + two 3D games)
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_online_smoke.gd
+      - name: Scene smoke (full offline match)
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --fixed-fps 60 --path /project --script res://tests/run_scene_smoke.gd
+
+  services:
+    name: Service suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Credential vectors are up to date
+        run: |
+          python3 tests/vectors/generate_token_vectors.py
+          git diff --exit-code tests/vectors
+      - name: Lobby pytest (throwaway PostgreSQL)
+        run: docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
+      - name: Results pytest (throwaway PostgreSQL)
+        run: docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+      - name: Clean up
+        if: always()
+        run: docker compose -f services/docker-compose.test.yml down -v
+
+  stack:
+    name: Exports, images and browser e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [godot, services]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway secrets
+        run: |
+          {
+            echo "MATCH_SECRET=$(openssl rand -hex 32)"
+            echo "RUNTIME_CONTROL_TOKEN=$(openssl rand -hex 32)"
+            echo "RESULTS_INGEST_TOKEN=$(openssl rand -hex 32)"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "LOBBY_DB_PASSWORD=$(openssl rand -hex 16)"
+            echo "RESULTS_DB_PASSWORD=$(openssl rand -hex 16)"
+          } > .env
+      # The gateway image runs the Web export and the match-runtime image the
+      # Linux Server export (tools/godot/Dockerfile checks both outputs exist).
+      - name: Build every image (both exports included)
+        run: docker compose build
+      - name: Start the stack
+        run: docker compose up -d --wait --wait-timeout 180
+      - name: Playwright
+        run: docker pull mcr.microsoft.com/playwright:v1.63.0-noble
+      # Each e2e script runs in the Playwright image inside the gateway's
+      # network namespace, so the page is served from http://localhost (Godot's
+      # web build needs a secure context).
+      - name: Browser loads the web build and reaches the runtime
+        run: bash tests/e2e/run.sh netprobe.mjs
+      - name: Two browsers play a match through the in-game Play Online menu
+        run: bash tests/e2e/run.sh online_menu.mjs
+      - name: Lobby API flow to results
+        run: bash tests/e2e/run.sh lobby_match.mjs
+      - name: Service logs
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
