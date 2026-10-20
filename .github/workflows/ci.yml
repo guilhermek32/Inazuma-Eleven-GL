@@ -52,6 +52,8 @@ jobs:
         run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_net_tests.gd
       - name: Credentials, control API, spool and lobby client tests
         run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_runtime_tests.gd
+      - name: AI bot tests (brain, job API, bot vs scripted client over loopback)
+        run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_bot_tests.gd
       - name: Online smoke (runtime + two 3D games)
         run: docker run --rm -v "$PWD:/project" "$GODOT_IMAGE" --headless --path /project --script res://tests/run_online_smoke.gd
       - name: Scene smoke (full offline match)
@@ -91,9 +93,11 @@ jobs:
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
             echo "LOBBY_DB_PASSWORD=$(openssl rand -hex 16)"
             echo "RESULTS_DB_PASSWORD=$(openssl rand -hex 16)"
+            echo "BOT_CONTROL_TOKEN=$(openssl rand -hex 32)"
           } > .env
-      # The gateway image runs the Web export and the match-runtime image the
-      # Linux Server export (tools/godot/Dockerfile checks both outputs exist).
+      # The gateway image runs the Web export; the match-runtime and ai-bot
+      # images run the Linux Server export (tools/godot/Dockerfile checks both
+      # outputs exist).
       - name: Build every image (both exports included)
         run: docker compose build
       - name: Start the stack
@@ -109,6 +113,10 @@ jobs:
         run: bash tests/e2e/run.sh online_menu.mjs
       - name: Lobby API flow to results
         run: bash tests/e2e/run.sh lobby_match.mjs
+      # A browser plays the AI bot to full time from the menu; then ai-bot is
+      # stopped (vs-AI fails cleanly, PvP still works) and started again.
+      - name: Online AI bot (vs-AI from the menu, ai-bot down and back)
+        run: bash tests/e2e/run_bot_checks.sh
       - name: Service logs
         if: failure()
         run: docker compose logs --no-color --tail 200
