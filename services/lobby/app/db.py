@@ -2,7 +2,8 @@
 
 players       guest identities (UUID) and their last display name
 rooms         one per human-readable room code; match_id is an independent
-              UUID; status mirrors the runtime (see service.py)
+              UUID; status mirrors the runtime (see service.py); mode is
+              "pvp" or "vs_ai" (then difficulty names the bot's level)
 reservations  at most one per (room, team); request_id makes create/join
               idempotent; confirmed once the runtime acknowledged it
 """
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS rooms (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Added with the vs-AI mode (Milestone 5): the bot's difficulty, NULL for PvP.
+ALTER TABLE rooms ADD COLUMN IF NOT EXISTS difficulty TEXT;
 CREATE INDEX IF NOT EXISTS rooms_active_idx ON rooms (status)
     WHERE status IN ('provisioning', 'waiting', 'running', 'paused');
 CREATE TABLE IF NOT EXISTS reservations (

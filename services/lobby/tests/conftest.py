@@ -1,6 +1,7 @@
 """Fixtures: a throwaway PostgreSQL database (TEST_DATABASE_URL points at a
-server where we may create databases) and an in-memory fake of the match
-runtime's control API, plugged into the lobby through httpx.MockTransport."""
+server where we may create databases) and in-memory fakes of the match
+runtime's control API and of the ai-bot job API, plugged into the lobby
+through httpx.MockTransport."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from app.main import create_app
 
 SECRET = b"lobby-test-secret"
 CONTROL_TOKEN = "control-token"
+BOT_TOKEN = "bot-token"
 TEST_DB = "lobby_test"
 
 
@@ -115,20 +117,76 @@ class FakeRuntime:
         return httpx.Response(405)
 
 
+class FakeBot:
+    """The ai-bot job API's semantics, in memory. `behaviour` decides what a
+    submitted job does: "join" (accepted, then joined on the first poll),
+    "fail" (accepted, then failed), "never" (stays accepted), "full" (503)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs: dict[str, dict] = {}
+        self.down = False
+        self.behaviour = "join"
+        self.calls: list[tuple[str, str]] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            raise httpx.ConnectError("ai-bot down", request=request)
+        assert request.headers["authorization"] == f"Bearer {BOT_TOKEN}"
+        path, method = request.url.path, request.method
+        with self.lock:
+            self.calls.append((method, path))
+            if method == "POST" and path == "/internal/v1/bots":
+                body = json.loads(request.content)
+                if self.behaviour == "full":
+                    return httpx.Response(503, json={"error": "bot service at capacity"})
+                job = self.jobs.get(body["match_id"])
+                if job is not None:
+                    same = all(job[k] == body[k] for k in ("token", "ws_url", "difficulty"))
+                    return httpx.Response(200 if same else 409, json=self._status(job))
+                job = {**body, "state": "accepted", "polls": 0}
+                self.jobs[body["match_id"]] = job
+                return httpx.Response(201, json=self._status(job))
+            job = self.jobs.get(path.rsplit("/", 1)[-1])
+            if job is None:
+                return httpx.Response(404, json={"error": "unknown bot job"})
+            if method == "GET":
+                job["polls"] += 1
+                if job["state"] == "accepted" and self.behaviour in ("join", "fail"):
+                    job["state"] = "joined" if self.behaviour == "join" else "failed"
+                return httpx.Response(200, json=self._status(job))
+            if method == "DELETE":
+                if job["state"] in ("accepted", "joined", "playing"):
+                    job["state"] = "stopped"
+                return httpx.Response(200, json=self._status(job))
+        return httpx.Response(405)
+
+    @staticmethod
+    def _status(job: dict) -> dict:
+        return {"match_id": job["match_id"], "state": job["state"], "reason": "", "difficulty": job["difficulty"]}
+
+
 @pytest.fixture
 def fake_runtime() -> FakeRuntime:
     return FakeRuntime()
 
 
 @pytest.fixture
-def settings(database_url) -> Settings:
-    return Settings(database_url=database_url, match_secret=SECRET, runtime_control_url="http://runtime",
-                    runtime_control_token=CONTROL_TOKEN)
+def fake_bot() -> FakeBot:
+    return FakeBot()
 
 
 @pytest.fixture
-def client(settings, fake_runtime):
-    app = create_app(settings, runtime_transport=httpx.MockTransport(fake_runtime.handle), background=False)
+def settings(database_url) -> Settings:
+    return Settings(database_url=database_url, match_secret=SECRET, runtime_control_url="http://runtime",
+                    runtime_control_token=CONTROL_TOKEN, bot_service_url="http://ai-bot", bot_control_token=BOT_TOKEN,
+                    bot_join_timeout_s=0.6, bot_poll_interval_s=0.05)
+
+
+@pytest.fixture
+def client(settings, fake_runtime, fake_bot):
+    app = create_app(settings, runtime_transport=httpx.MockTransport(fake_runtime.handle), background=False,
+                     bot_transport=httpx.MockTransport(fake_bot.handle))
     with app.state.service.pool.connection() as conn:
         conn.execute("TRUNCATE reservations, rooms, players")
     with TestClient(app) as c:

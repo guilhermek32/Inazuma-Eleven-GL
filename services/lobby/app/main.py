@@ -1,15 +1,20 @@
 """Lobby HTTP API. Behind the gateway these routes are public under
 /api/lobby (the gateway strips that prefix):
 
-  POST /v1/rooms               {nickname, half_length_s, request_id, mode?, player_id?}
+  POST /v1/rooms               {nickname, half_length_s, request_id, mode?, difficulty?, player_id?}
                                -> 201 {room_code, match_id, team: 0, token, ws_url, play_url, player_id, ...}
+                               mode "pvp" (default) or "vs_ai" with difficulty
+                               "easy" | "normal" (default) | "hard": answered
+                               once the AI bot holds team 1, so the creator
+                               connects straight into the match
   POST /v1/rooms/{code}/join   {nickname, request_id, player_id?} -> 200 {... team: 1 ...}
   GET  /v1/rooms/{code}        -> 200 {room_code, match_id, status, players, ...}
   GET  /health                 -> 200 {status: "ok"} when the database answers
 
 Errors are {"error": code, "detail": text}: 404 unknown room/player, 409
 room full/closed or request_id reused differently, 422 invalid input, 503
-runtime unavailable. Create and join are idempotent by request_id.
+runtime unavailable (runtime_unavailable) or, for vs_ai, the AI bot
+unavailable (bot_unavailable). Create and join are idempotent by request_id.
 
 Run: uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 """
@@ -26,12 +31,13 @@ from typing import Literal
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import logs
 from .config import Settings
 from .db import init_schema, make_pool
 from .errors import LobbyError
+from .bot_client import BotClient
 from .logs import log_event
 from .runtime_client import RuntimeClient
 from .service import LobbyService
@@ -54,13 +60,22 @@ class CreateRoom(BaseModel):
     nickname: str
     half_length_s: int = Field(default=120, ge=MIN_HALF_LENGTH_S, le=MAX_HALF_LENGTH_S)
     request_id: str = Field(pattern=REQUEST_ID_PATTERN)
-    mode: Literal["pvp"] = "pvp"
+    mode: Literal["pvp", "vs_ai"] = "pvp"
+    difficulty: Literal["easy", "normal", "hard"] | None = None
     player_id: uuid.UUID | None = None
 
     @field_validator("nickname")
     @classmethod
     def check_nickname(cls, v: str) -> str:
         return _nickname(v)
+
+    @model_validator(mode="after")
+    def check_difficulty(self) -> "CreateRoom":
+        if self.mode == "pvp" and self.difficulty is not None:
+            raise ValueError("difficulty only applies to mode vs_ai")
+        if self.mode == "vs_ai" and self.difficulty is None:
+            self.difficulty = "normal"
+        return self
 
 
 class JoinRoom(BaseModel):
@@ -75,14 +90,17 @@ class JoinRoom(BaseModel):
         return _nickname(v)
 
 
-def create_app(settings: Settings | None = None, runtime_transport=None, background: bool = True) -> FastAPI:
+def create_app(settings: Settings | None = None, runtime_transport=None, background: bool = True,
+               bot_transport=None) -> FastAPI:
     logs.setup("lobby")
     settings = settings or Settings.from_env()
     pool = make_pool(settings.database_url)
     init_schema(pool)
     runtime = RuntimeClient(settings.runtime_control_url, settings.runtime_control_token,
                             settings.runtime_timeout_s, transport=runtime_transport)
-    service = LobbyService(pool, runtime, settings)
+    bot = BotClient(settings.bot_service_url, settings.bot_control_token, settings.bot_timeout_s,
+                    transport=bot_transport)
+    service = LobbyService(pool, runtime, settings, bot)
     stop = threading.Event()
 
     def reconciler() -> None:
@@ -100,12 +118,13 @@ def create_app(settings: Settings | None = None, runtime_transport=None, backgro
         worker = threading.Thread(target=reconciler, name="reconciler", daemon=True) if background else None
         if worker:
             worker.start()   # first pass right away: a restarted lobby converges at once
-        log_event("lobby_started", runtime=settings.runtime_control_url)
+        log_event("lobby_started", runtime=settings.runtime_control_url, bot=settings.bot_service_url or None)
         yield
         stop.set()
         if worker:
             worker.join(timeout=5)
         runtime.close()
+        bot.close()
         pool.close()
 
     app = FastAPI(title="Inazuma lobby", version="1", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -141,7 +160,7 @@ def create_app(settings: Settings | None = None, runtime_transport=None, backgro
     @app.post("/v1/rooms", status_code=201)
     def create_room(body: CreateRoom):
         return service.create_room(body.nickname, body.half_length_s, body.request_id,
-                                   str(body.player_id) if body.player_id else None)
+                                   str(body.player_id) if body.player_id else None, body.mode, body.difficulty)
 
     @app.post("/v1/rooms/{code}/join")
     def join_room(code: str, body: JoinRoom):

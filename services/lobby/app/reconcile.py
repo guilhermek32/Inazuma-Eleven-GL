@@ -10,13 +10,16 @@ stores the last status it observed:
 
 Reconciliation also settles pending (unconfirmed) joins: confirmed when the
 runtime holds that reservation, released when the runtime never saw it within
-pending_reservation_ttl_s; and it cleans up rooms stuck in "provisioning"
+pending_reservation_ttl_s; it cancels a waiting vs-AI room whose bot job has
+stopped or failed (or that the bot service no longer knows), so the human is
+not left waiting for an opponent that is gone; and it cleans up rooms stuck in "provisioning"
 (lobby crashed mid-create) after stale_provisioning_s. reconcile_all() runs at
 startup and periodically, so a restarted lobby converges on its own.
 """
 
 from __future__ import annotations
 
+from .bot_client import FAILED_STATES, BotError
 from .errors import NotFound
 from .logs import log_event
 from .runtime_client import RuntimeError_, RuntimeUnavailable
@@ -40,6 +43,8 @@ class ReconcileMixin:
         out = {"room_code": code, "match_id": str(room["match_id"]), "mode": room["mode"], "status": status,
                "half_length_s": room["half_length_s"], "players": players,
                "created_at": room["created_at"].isoformat()}
+        if room["mode"] == "vs_ai":
+            out["difficulty"] = room["difficulty"]
         if info:
             out["connected"] = info.get("connected", [False, False])
             if "score" in info:
@@ -75,6 +80,8 @@ class ReconcileMixin:
             new = stored
         if info is not None and "reservations" in info:
             self._settle_pending(room, info["reservations"])
+        if room["mode"] == "vs_ai" and new == "waiting":
+            new = self._check_bot(room, new)
         if new != stored:
             with self.pool.connection() as conn:
                 conn.execute("UPDATE rooms SET status = %s, updated_at = now() WHERE room_code = %s AND status = %s",
@@ -94,6 +101,23 @@ class ReconcileMixin:
                 elif self._age_s(p["created_at"]) > self.settings.pending_reservation_ttl_s:
                     conn.execute("DELETE FROM reservations WHERE reservation_id = %s", (p["reservation_id"],))
                     log_event("pending_reservation_released", match_id=str(room["match_id"]), team=p["team"])
+
+    def _check_bot(self, room: dict, status: str) -> str:
+        """A waiting vs-AI room needs its bot: cancel the match when the job is gone."""
+        match_id = str(room["match_id"])
+        try:
+            job = self.bot.status(match_id)
+        except BotError:
+            return status   # bot service unreachable: unknown, keep the room
+        if job is not None and job.get("state") not in FAILED_STATES:
+            return status
+        try:
+            self.runtime.cancel(match_id)
+        except RuntimeError_ as e:
+            log_event("bot_lost_cancel_failed", match_id=match_id, error=str(e))
+            return status
+        log_event("bot_lost", match_id=match_id, room_code=room["room_code"], job=(job or {}).get("state"))
+        return "cancelled"
 
     def reconcile_all(self) -> int:
         """Reconciles every non-terminal room; returns how many were checked."""

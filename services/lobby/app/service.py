@@ -10,6 +10,16 @@ Create:  record intent (room + team-0 reservation, status provisioning) ->
          runtime PUT match + PUT reservation 0 -> status waiting -> credential.
          On any runtime failure the room is cancelled at the runtime (best
          effort) and deleted here; the caller gets 503. Idempotent by request_id.
+vs-AI:   the same, plus the bot's own team-1 reservation (a stable guest id
+         per difficulty, see bot_client.bot_player) reserved at the runtime
+         with team 1's off-ball AI at the chosen difficulty; the lobby then
+         submits a bot job with the bot's credential and the *internal*
+         runtime URL, and polls it until the bot has joined its slot. Only
+         then is the room "waiting" (for the human, who kicks off on
+         connecting). Bot service unconfigured, down, refusing, failing or
+         not joined within bot_join_timeout_s: the job is stopped, the
+         runtime match cancelled and the records deleted (503 bot_unavailable,
+         no orphan reservation or session).
 Join:    lock the room row, insert the team-1 reservation (unique per room and
          team, so exactly one concurrent joiner wins), then runtime PUT
          reservation 1 -> confirmed -> credential. If the runtime is
@@ -27,6 +37,7 @@ import uuid
 from psycopg import errors
 
 from . import credentials
+from .bot_client import DIFFICULTY_INDEX, FAILED_STATES, JOINED_STATES, BotClient, BotError, BotUnavailable, bot_player
 from .errors import Conflict, NotFound, Unavailable
 from .logs import log_event
 from .reconcile import ReconcileMixin
@@ -35,11 +46,14 @@ from .runtime_client import RuntimeClient, RuntimeError_, RuntimeUnavailable
 ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ROOM_CODE_LENGTH = 6
 
-def match_config(half_length_s: int) -> dict:
-    """The MatchConfig (scripts/match/match_config.gd, version 1) of a PvP room."""
+def match_config(half_length_s: int, bot_difficulty: str | None = None) -> dict:
+    """The MatchConfig (scripts/match/match_config.gd, version 1) of a room. A
+    vs-AI room plays the bot's team (1) at the chosen difficulty, so its
+    off-ball AI team-mates match the bot; the human's team-mates stay Normal."""
+    bot_team = DIFFICULTY_INDEX[bot_difficulty] if bot_difficulty else 1
     return {"version": 1, "half_length_s": float(half_length_s), "formations": [1, 1],
             "kits": [{"shirt": 0, "shorts": 4, "boots": 5}, {"shirt": 1, "shorts": 4, "boots": 5}],
-            "team_difficulty": [1, 1], "fouls_enabled": True, "offside_enabled": False, "weather": 0}
+            "team_difficulty": [1, bot_team], "fouls_enabled": True, "offside_enabled": False, "weather": 0}
 
 
 def new_room_code() -> str:
@@ -47,18 +61,22 @@ def new_room_code() -> str:
 
 
 class LobbyService(ReconcileMixin):
-    def __init__(self, pool, runtime: RuntimeClient, settings, clock=time.time):
+    def __init__(self, pool, runtime: RuntimeClient, settings, bot: BotClient | None = None, clock=time.time):
         self.pool = pool
         self.runtime = runtime
         self.settings = settings
+        self.bot = bot or BotClient("", "")
         self.clock = clock
 
     # --- create / join ---------------------------------------------------------------
 
-    def create_room(self, nickname: str, half_length_s: int, request_id: str, player_id: str | None = None) -> dict:
+    def create_room(self, nickname: str, half_length_s: int, request_id: str, player_id: str | None = None,
+                    mode: str = "pvp", difficulty: str | None = None) -> dict:
+        if mode == "vs_ai" and not self.bot.configured:
+            raise Unavailable("bot_unavailable", "the AI opponent is not available on this server")
         for _ in range(3):   # a concurrent duplicate request_id loses the insert race: re-read
             try:
-                row = self._record_creation(nickname, half_length_s, request_id, player_id)
+                row = self._record_creation(nickname, half_length_s, request_id, player_id, mode, difficulty)
                 break
             except errors.UniqueViolation:
                 continue
@@ -69,7 +87,7 @@ class LobbyService(ReconcileMixin):
             row["status"] = "waiting"
         return self._grant(row)
 
-    def _record_creation(self, nickname, half_length_s, request_id, player_id) -> dict:
+    def _record_creation(self, nickname, half_length_s, request_id, player_id, mode="pvp", difficulty=None) -> dict:
         with self.pool.connection() as conn, conn.transaction():
             row = conn.execute(
                 "SELECT r.*, v.reservation_id, v.player_id, v.nickname, v.team FROM rooms r "
@@ -77,6 +95,7 @@ class LobbyService(ReconcileMixin):
                 (request_id,)).fetchone()
             if row is not None:
                 if row["nickname"] != nickname or row["half_length_s"] != half_length_s \
+                        or row["mode"] != mode or row["difficulty"] != difficulty \
                         or (player_id and str(row["player_id"]) != player_id):
                     raise Conflict("request_conflict", "request_id was used with different parameters")
                 return row
@@ -90,9 +109,10 @@ class LobbyService(ReconcileMixin):
                 try:
                     with conn.transaction():
                         conn.execute(
-                            "INSERT INTO rooms (room_code, match_id, mode, half_length_s, config, status, expires_at, "
-                            "create_request_id) VALUES (%s, %s, 'pvp', %s, %s::jsonb, 'provisioning', %s, %s)",
-                            (code, match_id, half_length_s, _json(match_config(half_length_s)), expires_at, request_id))
+                            "INSERT INTO rooms (room_code, match_id, mode, difficulty, half_length_s, config, status, "
+                            "expires_at, create_request_id) VALUES (%s, %s, %s, %s, %s, %s::jsonb, 'provisioning', %s, %s)",
+                            (code, match_id, mode, difficulty, half_length_s, _json(match_config(half_length_s, difficulty)),
+                             expires_at, request_id))
                     break
                 except errors.UniqueViolation as e:
                     if e.diag.constraint_name != "rooms_pkey":
@@ -101,6 +121,12 @@ class LobbyService(ReconcileMixin):
                 raise Unavailable("no_room_code", "could not allocate a room code")
             conn.execute("INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id) "
                          "VALUES (%s, %s, 0, %s, %s, %s)", (uuid.uuid4(), code, pid, nickname, request_id))
+            if mode == "vs_ai":
+                bot_id, bot_name = bot_player(difficulty)
+                conn.execute("INSERT INTO players (player_id, nickname) VALUES (%s, %s) ON CONFLICT (player_id) "
+                             "DO UPDATE SET last_seen_at = now()", (bot_id, bot_name))
+                conn.execute("INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id) "
+                             "VALUES (%s, %s, 1, %s, %s, %s)", (uuid.uuid4(), code, bot_id, bot_name, request_id + ":ai"))
             return conn.execute(
                 "SELECT r.*, v.reservation_id, v.player_id, v.nickname, v.team FROM rooms r "
                 "JOIN reservations v ON v.room_code = r.room_code AND v.team = 0 WHERE r.room_code = %s",
@@ -108,23 +134,69 @@ class LobbyService(ReconcileMixin):
 
     def _provision(self, row: dict) -> None:
         match_id = str(row["match_id"])
+        bot_res = self._bot_reservation(row["room_code"]) if row["mode"] == "vs_ai" else None
         try:
             status = self.runtime.provision(match_id, row["config"], row["expires_at"])
             self.runtime.reserve(match_id, 0, str(row["reservation_id"]), str(row["player_id"]), row["nickname"])
+            if bot_res:
+                self.runtime.reserve(match_id, 1, str(bot_res["reservation_id"]), str(bot_res["player_id"]),
+                                     bot_res["nickname"])
         except RuntimeError_ as e:
             log_event("provisioning_failed", match_id=match_id, room_code=row["room_code"], error=str(e))
             self._abandon(row)
             raise Unavailable("runtime_unavailable", "the match runtime is unavailable, try again") from None
+        if bot_res:
+            self._start_bot(row, bot_res)
         with self.pool.connection() as conn, conn.transaction():
             conn.execute("UPDATE rooms SET status = 'waiting', runtime_boot_id = %s, updated_at = now() "
                          "WHERE room_code = %s AND status = 'provisioning'", (status.get("boot_id"), row["room_code"]))
-            conn.execute("UPDATE reservations SET confirmed = TRUE WHERE reservation_id = %s", (row["reservation_id"],))
-        log_event("room_created", match_id=match_id, room_code=row["room_code"], boot_id=status.get("boot_id"))
+            conn.execute("UPDATE reservations SET confirmed = TRUE WHERE room_code = %s", (row["room_code"],))
+        log_event("room_created", match_id=match_id, room_code=row["room_code"], mode=row["mode"],
+                  boot_id=status.get("boot_id"))
+
+    def _bot_reservation(self, code: str) -> dict:
+        with self.pool.connection() as conn:
+            return conn.execute("SELECT reservation_id, player_id, nickname FROM reservations "
+                                "WHERE room_code = %s AND team = 1", (code,)).fetchone()
+
+    def _start_bot(self, row: dict, bot_res: dict) -> None:
+        """Submits the bot job and waits until the bot holds its slot; on any
+        failure undoes the whole creation and raises 503 bot_unavailable."""
+        match_id = str(row["match_id"])
+        claims = credentials.Claims(match_id=match_id, reservation_id=str(bot_res["reservation_id"]), team=1,
+                                    player_id=str(bot_res["player_id"]), exp=int(row["expires_at"]))
+        token = credentials.sign(claims, self.settings.match_secret)
+        ws_url = f"{self.settings.bot_runtime_ws_url}/ws/game/{match_id}"
+        deadline = time.monotonic() + self.settings.bot_join_timeout_s
+        try:
+            job = self.bot.submit(match_id, token, ws_url, row["difficulty"])
+            log_event("bot_requested", match_id=match_id, room_code=row["room_code"], difficulty=row["difficulty"])
+            while job.get("state") not in JOINED_STATES:
+                if job.get("state") in FAILED_STATES:
+                    raise BotError(f"bot job {job.get('state')}: {job.get('reason', '')}")
+                if time.monotonic() >= deadline:
+                    raise BotError("the bot did not join in time")
+                time.sleep(self.settings.bot_poll_interval_s)
+                try:
+                    job = self.bot.status(match_id) or {"state": "failed", "reason": "job unknown to the bot service"}
+                except BotUnavailable:
+                    pass   # transient: keep the last answer and retry until the deadline
+        except BotError as e:
+            log_event("bot_start_failed", match_id=match_id, room_code=row["room_code"], error=str(e))
+            self._abandon(row)
+            raise Unavailable("bot_unavailable", "the AI opponent is unavailable, try again or play a friend") from None
+        log_event("bot_joined", match_id=match_id, room_code=row["room_code"], state=job.get("state"))
 
     def _abandon(self, row: dict) -> None:
         """Undoes a failed creation: cancel at the runtime (best effort; an
-        orphan is cancelled by the runtime's waiting deadline anyway) and
-        delete the records so the request_id can be retried."""
+        orphan is cancelled by the runtime's waiting deadline anyway), stop a
+        vs-AI room's bot job (best effort) and delete the records so the
+        request_id can be retried."""
+        if row.get("mode") == "vs_ai":
+            try:
+                self.bot.stop(str(row["match_id"]))
+            except BotError:
+                pass
         try:
             self.runtime.cancel(str(row["match_id"]))
         except RuntimeError_:
