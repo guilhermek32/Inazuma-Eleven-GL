@@ -5,7 +5,10 @@ An arcade 11-v-11 football game inspired by *Inazuma Eleven*. The active project
 C++/OpenGL build remains in the repo as a legacy reference.
 
 > For the full technical write-up — runtime flow, module map, and how each grading
-> criterion is implemented — see **[`AS_BUILT.md`](AS_BUILT.md)**.
+> criterion is implemented — see **[`AS_BUILT.md`](AS_BUILT.md)**. The online system
+> (requirements matrix, service and component diagrams, every contract, failure handling)
+> is documented in **[`ARCHITECTURE_ONLINE.md`](ARCHITECTURE_ONLINE.md)**, and
+> **[`docs/demo.md`](docs/demo.md)** is the step-by-step demo runbook.
 
 ---
 
@@ -53,11 +56,15 @@ players, ball and UI — is built **procedurally in code** at runtime, not autho
 | Shoot | Hold `SPACE` to charge, release to kick | Hold `R1`/`RB`, release |
 | Pass | `E` | `A` |
 | Switch player | `Q` | `L1`/`LB` |
+| Tackle (win the ball) | `Ctrl` or right-click | `X` |
+| Sprint | `Shift` (drains stamina) | `R2`/`RT` |
 | Pause / back | `Esc` | `Start` |
 
 You always control the player nearest the ball; while your team has possession, control
 locks to the ball carrier (FIFA-style). Release a fully charged shot from close range to
-trigger a special shot.
+trigger a special shot. A tackle only wins the ball: time it from the front or side,
+because a tackle from behind is a foul and gives the other team a free kick (fouls are on
+by default and always online; Settings can switch them off for offline arcade play).
 
 **Pre-match ("Play Now"):** each device (keyboard+mouse and every connected pad) gets a
 chip in the middle column. Move your own chip to **RED** (left) or **BLUE** (right) with
@@ -88,7 +95,7 @@ scripts/
   config/game_config.gd       # constants, enums, to_3d() coordinate helper
   config/launch_args.gd       # -- --name=value (desktop) / ?name=value (web) options
   config/render_tier.gd       # FULL (Forward+) or WEB (Compatibility) visual tier
-  data/                       # plain state: PlayerState, BallState, InputSnapshot, VfxParticle
+  data/                       # plain state: PlayerState, BallState, InputSnapshot, TeamState
   build/                      # one-shot scene construction
     material_factory.gd       #   materials + procedural textures
     pitch_builder.gd          #   pitch, field lines, goals
@@ -163,7 +170,7 @@ separate `lobby` and `results` databases and roles) are infrastructure. Only the
 gateway publishes ports; the runtime control API and results ingestion are never routed.
 
 ```bash
-cp .env.example .env             # then replace every secret
+cp .env.example .env             # then replace every secret (docs/demo.md step 1 generates them)
 docker compose up --build        # gateway on http://localhost:8080
 ```
 
@@ -196,8 +203,9 @@ The bot is recorded in results under a stable guest id per difficulty as `AI (Ea
 bot works as an autonomous agent (goal, observations, decide/act loop, difficulty
 parameters, decision log) is in [`docs/ai_bot.md`](docs/ai_bot.md).
 
-Credentials, contracts and failure behaviour are documented at the top of
-`services/lobby/app/credentials.py`, `scripts/server/runtime_control_api.gd`,
+Credentials, contracts and failure behaviour are collected in
+[`ARCHITECTURE_ONLINE.md`](ARCHITECTURE_ONLINE.md) (sections 5-7), and specified at the top
+of `services/lobby/app/credentials.py`, `scripts/server/runtime_control_api.gd`,
 `scripts/server/result_spool.gd`, `services/lobby/app/reconcile.py` and
 `services/results/app/service.py`.
 
@@ -220,6 +228,9 @@ bash tests/e2e/run.sh netprobe.mjs      # web build boots on Compatibility, WebS
 bash tests/e2e/run_failure_checks.sh    # results down at full time; runtime restart mid-match
 bash tests/e2e/run_bot_checks.sh        # a browser plays the AI from the menu; ai-bot down and back
 ```
+
+The scripts look for the containers of the `inazuma-online` project; for a stack started
+under another name (`COMPOSE_PROJECT_NAME=...`), export the same variable for them.
 
 - `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket
   path (`tests/e2e/netprobe.mjs` automates it).
@@ -357,6 +368,12 @@ Its sources are under `src/` and `include/`; it is documented separately in
 
 ## Documentation
 
+The online migration's Milestones 0-6 are complete (reusable match component, protocol
+and authoritative runtime, lobby/results services, Play Online menu + web tier + CI, the
+online AI bot, documentation and demo).
+
+- **[`ARCHITECTURE_ONLINE.md`](ARCHITECTURE_ONLINE.md)** — the online system: requirements matrix (nonviolent game, microservices, software components, AI agent), deployment and component diagrams, data ownership, every contract, lifecycle, failure handling, security, known limitations.
+- **[`docs/demo.md`](docs/demo.md)** — demo runbook from a fresh checkout, with expected output and troubleshooting.
 - **[`AS_BUILT.md`](AS_BUILT.md)** — as-built technical report and grading-criteria map (Godot 3D build).
 - `CLAUDE.md` — concise module map / contributor guide.
 - [`docs/ai_bot.md`](docs/ai_bot.md) — the online AI opponent as an autonomous agent (Milestone 5).
