@@ -8,6 +8,9 @@ extends RefCounted
 ## The game-rule preferences here (difficulty, half length, fouls, offside,
 ## weather) only seed the MatchConfig of an *offline* match; they are never the
 ## authoritative rules of a running match (see MatchConfig / MatchSession).
+## The online section remembers the guest identity the lobby issued (nickname,
+## player_id, so a returning guest keeps one leaderboard row) and the last
+## half length picked for a new room; the room's rules come from the lobby.
 
 var difficulty := 1            # 0 Easy, 1 Normal, 2 Hard (index into MatchConfig.DIFFICULTY_PROFILES)
 var camera_angle := 1          # 0 Low, 1 Broadcast, 2 High, 3 Top-down
@@ -24,6 +27,9 @@ var fullscreen := false
 var vol_master := 0.9
 var vol_music := 0.7
 var vol_sfx := 1.0
+var online_nickname := ""
+var online_player_id := ""       # lobby-issued guest UUID; "" until the first room
+var online_half_length := 120    # seconds per half for rooms this player creates
 var audio: AudioManager
 
 func apply() -> void:
@@ -66,6 +72,9 @@ func load_settings() -> void:
 		vol_master = cfg.get_value("audio", "master", vol_master)
 		vol_music = cfg.get_value("audio", "music", vol_music)
 		vol_sfx = cfg.get_value("audio", "sfx", vol_sfx)
+		online_nickname = str(cfg.get_value("online", "nickname", online_nickname))
+		online_player_id = str(cfg.get_value("online", "player_id", online_player_id))
+		online_half_length = int(cfg.get_value("online", "half_length", online_half_length))
 	_apply_settings()
 
 func _save_settings() -> void:
@@ -81,6 +90,9 @@ func _save_settings() -> void:
 	cfg.set_value("audio", "master", vol_master)
 	cfg.set_value("audio", "music", vol_music)
 	cfg.set_value("audio", "sfx", vol_sfx)
+	cfg.set_value("online", "nickname", online_nickname)
+	cfg.set_value("online", "player_id", online_player_id)
+	cfg.set_value("online", "half_length", online_half_length)
 	cfg.save(GameConfig.SETTINGS_PATH)
 
 func setup_input_actions() -> void:

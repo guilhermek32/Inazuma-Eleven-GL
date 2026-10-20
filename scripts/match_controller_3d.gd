@@ -8,6 +8,7 @@ extends Node3D
 ## clock and halves live in MatchSession; this controller is the *offline
 ## adapter* around it: local devices feed it input, and its drained events drive
 ## the view, HUD and audio. The rest is the UI state machine (menus, pause).
+## Online it is the *online adapter* instead (see "online adapter" below).
 ## See CLAUDE.md for the module map.
 
 # Scene roots (created in _build_scene_roots, populated by the builders)
@@ -52,6 +53,13 @@ var _lineup_kits: Array[Dictionary] = [GameConfig.DEFAULT_KIT_A.duplicate(), Gam
 # snapshots and never stepped. null while playing offline.
 var net: NetClient
 var _online_state := {}
+# Creator of a lobby room: stay on the waiting page until the kickoff event.
+var _await_kickoff := false
+# The local device that last produced input (DEVICE_KBM or a pad id); it drives
+# our team online, so a pad works there as well as keyboard+mouse.
+var _last_device := GameConfig.DEVICE_KBM
+var _latency_probe: LatencyProbe
+var render_tier := RenderTier.FULL
 
 func _ready() -> void:
 	material_factory = MaterialFactory.new()
@@ -61,6 +69,9 @@ func _ready() -> void:
 	stadium_builder.mf = material_factory
 	stadium_builder.host = self
 	stadium_builder.stadium_root = stadium_root
+	render_tier = RenderTier.detect()
+	stadium_builder.web_tier = render_tier == RenderTier.WEB
+	print("[render] tier=%s method=%s" % [RenderTier.tier_name(render_tier), RenderingServer.get_current_rendering_method()])
 	stadium_builder.build_environment()
 	stadium_builder.build_camera()
 	camera_rig = stadium_builder.camera_rig
@@ -79,7 +90,7 @@ func _ready() -> void:
 	# Build and bake the GI probe over the static scene now — the procedural meshes
 	# are already in the tree, and baking here (before players are created) keeps the
 	# dynamic players out of the probe so only the static neon hoardings
-	# bounce coloured light onto the pitch.
+	# bounce coloured light onto the pitch. (Both are no-ops on the web tier.)
 	stadium_builder.build_gi()
 	stadium_builder.bake_gi()
 	hud = MatchHud.new()
@@ -124,6 +135,8 @@ func _ready() -> void:
 	stadium_builder.build_weather()
 	_initialize_session()
 	Input.joy_connection_changed.connect(_on_joy_connection_changed)
+	if LaunchArgs.flag("latency"):
+		_latency_probe = LatencyProbe.new()
 	_set_game_state(GameConfig.GameState.MENU)
 	print("Inazuma Eleven 3D environment ready")
 	_start_online_from_launch_args()
@@ -139,7 +152,10 @@ func _physics_process(delta: float) -> void:
 	input_reader.read(sim.teams, sim.restart_timer)
 	if net != null:
 		# Online: the runtime simulates; we only send our team's input.
-		net.send_input(sim.teams[net.team].input)
+		var ts: TeamState = sim.teams[net.team]
+		if _latency_probe != null and ts.selected_index >= 0 and ts.selected_index < ts.players.size():
+			_latency_probe.on_input(ts.input.axis, ts.players[ts.selected_index], Time.get_ticks_usec())
+		net.send_input(ts.input)
 		return
 	session.step(delta)
 	for ev in session.drain_events():
@@ -219,6 +235,10 @@ func _dispatch_event(ev: Dictionary) -> void:
 		# Online-only room events.
 		"kickoff":
 			print("[online] kickoff")
+			if game_state == GameConfig.GameState.ONLINE:
+				_await_kickoff = false
+				_set_game_state(GameConfig.GameState.PLAYING)
+				_apply_weather()
 			audio.play_whistle()
 			hud.show_banner("KICK OFF", Color(1.0, 0.95, 0.55), 1.2)
 		"paused":
@@ -234,18 +254,12 @@ func _dispatch_event(ev: Dictionary) -> void:
 ## Starts online play when the process was launched for it:
 ##   desktop:  godot-4 --path . -- --connect=ws://host:8910/ws/game/<id> --token=<credential>
 ##   web:      https://<gateway>/?match=<id>&token=<credential>   (same-origin WebSocket)
-## The lobby flow (Milestone 3-4) will call start_online() itself.
+## The in-game Play Online menu (OnlineMenu) goes through start_online_from_lobby().
 func _start_online_from_launch_args() -> void:
-	var url := ""
-	var token := ""
-	for arg in OS.get_cmdline_user_args():
-		if arg.begins_with("--connect="):
-			url = arg.substr(10)
-		elif arg.begins_with("--token="):
-			token = arg.substr(8)
+	var url := LaunchArgs.value("connect")
+	var token := LaunchArgs.value("token")
 	if OS.has_feature("web"):
-		var match_id := str(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('match') || ''", true))
-		token = str(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('token') || ''", true))
+		var match_id := LaunchArgs.value("match")
 		if match_id != "":
 			var proto := str(JavaScriptBridge.eval("window.location.protocol", true))
 			var host := str(JavaScriptBridge.eval("window.location.host", true))
@@ -268,6 +282,20 @@ func start_online(url: String, token: String) -> void:
 		return
 	hud.show_banner("CONNECTING...", Color(0.8, 0.9, 1.0), 10.0, false)
 
+## A lobby grant from the Play Online menu. The creator (`await_kickoff`)
+## keeps the waiting page with the room code up until the opponent joins and
+## the runtime kicks off; a joiner enters the match on WELCOME.
+func start_online_from_lobby(url: String, token: String, await_kickoff: bool) -> void:
+	start_online(url, token)
+	_await_kickoff = await_kickoff and net != null
+
+## Cancel on the waiting page: drop the connection (the unjoined room expires
+## on the runtime's waiting deadline).
+func leave_online_wait() -> void:
+	print("[online] left the waiting room")
+	_await_kickoff = false
+	_leave_online()
+
 func net_team() -> int:
 	return net.team if net != null else -1
 
@@ -276,7 +304,7 @@ func net_team() -> int:
 func _on_net_welcome() -> void:
 	print("[online] joined match %s as team %d" % [net.match_id, net.team])
 	for t in 2:
-		session.set_team_device(t, GameConfig.DEVICE_KBM if t == net.team else GameConfig.DEVICE_REMOTE)
+		session.set_team_device(t, _last_device if t == net.team else GameConfig.DEVICE_REMOTE)
 	session.initialize(net.config, 0)
 	session.drain_events()
 	_online_state = {}
@@ -284,9 +312,11 @@ func _on_net_welcome() -> void:
 	_rebuild_player_visuals()
 	hud.set_team_colors(sim.teams[0].kit.shirt, sim.teams[1].kit.shirt)
 	hud.reset()
+	hud.show_banner("WAITING FOR OPPONENT", Color(0.8, 0.9, 1.0), 600.0, false)
+	if _await_kickoff and game_state == GameConfig.GameState.ONLINE:
+		return   # the waiting page stays up; the kickoff event enters the match
 	_set_game_state(GameConfig.GameState.PLAYING)
 	_apply_weather()
-	hud.show_banner("WAITING FOR OPPONENT", Color(0.8, 0.9, 1.0), 600.0, false)
 
 func _poll_online() -> void:
 	net.poll()
@@ -297,6 +327,10 @@ func _poll_online() -> void:
 	if not s.is_empty() and net.config != null:
 		_online_state = SnapshotBuffer.apply_to(sim, s.a, s.b, s.t)
 		_online_state["half_length_s"] = net.config.half_length_s
+		if _latency_probe != null:
+			var ms := _latency_probe.on_frame(Time.get_ticks_usec())
+			if ms >= 0.0:
+				print("[latency] input_to_visible_ms=%.1f rtt_ms=%d" % [ms, roundi(net.rtt_ms)])
 	for ev in net.buffer.take_due_events(now):
 		_dispatch_event(ev)
 
@@ -306,9 +340,15 @@ func _on_net_closed(code: int, reason: String) -> void:
 	# match_over and the close in the same frame).
 	for ev in net.buffer.take_all_events():
 		_dispatch_event(ev)
-	# A finished match closes the connection after its final events: nothing to report.
-	if game_state != GameConfig.GameState.FULLTIME:
-		menu.set_fulltime_text("CONNECTION CLOSED\n%s\n(code %d)" % [reason if reason != "" else "connection lost", code])
+	var why := reason if reason != "" else "connection lost"
+	if game_state == GameConfig.GameState.ONLINE:
+		# Still in the lobby screens (waiting room, or connecting after a join).
+		_await_kickoff = false
+		menu.online.show_connection_error("Connection to the match closed: %s (code %d)" % [why, code])
+	elif game_state != GameConfig.GameState.FULLTIME:
+		# A finished match closes the connection after its final events: nothing to report.
+		menu.set_fulltime_text("CONNECTION CLOSED\n%s\n(code %d)" % [why, code])
+		menu.set_fulltime_online(true)
 		_set_game_state(GameConfig.GameState.FULLTIME)
 	_leave_online.call_deferred()
 
@@ -343,11 +383,16 @@ func _on_goal(ev: Dictionary) -> void:
 	audio.play_crowd_roar()
 
 func _input(event: InputEvent) -> void:
+	_note_input_device(event)
 	if event.is_action_pressed("ui_cancel"):
 		match game_state:
 			GameConfig.GameState.PLAYING:
 				# An online match can't be paused locally; Esc leaves it.
+				if net != null:
+					print("[online] left the match")
 				_set_game_state(GameConfig.GameState.MENU if net != null else GameConfig.GameState.PAUSED)
+			GameConfig.GameState.ONLINE:
+				menu.online.back()
 			GameConfig.GameState.PAUSED:
 				_set_game_state(GameConfig.GameState.PLAYING)
 			GameConfig.GameState.HOWTO, GameConfig.GameState.SETTINGS:
@@ -360,11 +405,29 @@ func _input(event: InputEvent) -> void:
 					_set_game_state(GameConfig.GameState.MENU)
 		get_viewport().set_input_as_handled()
 
+## Tracks the local device that last produced input; online, our team follows
+## it (so a pad can take over from keyboard+mouse and back mid-match). Mouse
+## motion alone doesn't count, so a nudged mouse never steals a pad's aim.
+func _note_input_device(event: InputEvent) -> void:
+	var device := _last_device
+	if event is InputEventJoypadButton and event.pressed:
+		device = event.device
+	elif event is InputEventJoypadMotion and absf(event.axis_value) > 0.5:
+		device = event.device
+	elif event is InputEventKey or event is InputEventMouseButton:
+		device = GameConfig.DEVICE_KBM
+	if device == _last_device:
+		return
+	_last_device = device
+	if net != null and net.team >= 0 and sim.teams[net.team].device != GameConfig.DEVICE_REMOTE:
+		session.set_team_device(net.team, device)
+		print("[online] input device: %s" % ("keyboard+mouse" if device == GameConfig.DEVICE_KBM else "pad %d" % device))
+
 func _set_game_state(next: int) -> void:
 	# Never leave the world in slow-mo when we step out of live play (pause, menus, …).
 	if next != GameConfig.GameState.PLAYING:
 		session.cancel_slow_motion()
-	if next == GameConfig.GameState.MENU and net != null:
+	if (next == GameConfig.GameState.MENU or next == GameConfig.GameState.ONLINE) and net != null:
 		_leave_online()
 	if next == GameConfig.GameState.HOWTO or next == GameConfig.GameState.SETTINGS:
 		prev_menu_state = game_state if game_state in [GameConfig.GameState.MENU, GameConfig.GameState.PAUSED] else GameConfig.GameState.MENU
@@ -436,6 +499,7 @@ func _rebuild_player_visuals() -> void:
 func _end_match(ev: Dictionary) -> void:
 	if net != null:
 		print("[online] match over (%s) %d-%d" % [ev.get("reason", "full_time"), ev.score_left, ev.score_right])
+	menu.set_fulltime_online(net != null)
 	audio.play_whistle()
 	var result := "DRAW"
 	if ev.score_left > ev.score_right:

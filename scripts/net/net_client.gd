@@ -14,6 +14,9 @@ extends RefCounted
 ## sends them with the held state in one INPUT frame per tick. The runtime
 ## de-duplicates and orders them (see RemoteInputQueue). A reconnect is a new
 ## epoch: nothing queued under the previous connection is replayed.
+##
+## Traffic counters (for measurements): `rx_stats` / `tx_stats` map a
+## NetProtocol.Type to {count, bytes} of the messages received / sent.
 
 signal welcomed
 signal closed(code: int, reason: String)
@@ -36,6 +39,8 @@ var latest_snapshot := {}
 var rtt_ms := -1.0
 var last_error := {}
 var close_code := 0
+var rx_stats := {}
+var tx_stats := {}
 
 var _ws := WebSocketPeer.new()
 var _token := ""
@@ -84,6 +89,7 @@ func poll(now_ms: float = Time.get_ticks_msec()) -> void:
 			closed.emit(close_code, reason)
 
 func _on_packet(bytes: PackedByteArray, now_ms: float) -> void:
+	_count(rx_stats, bytes)
 	var msg := NetProtocol.decode(bytes)
 	if msg.is_empty():
 		return
@@ -134,8 +140,17 @@ func send_frame(axis: Vector2, sprint: bool, shoot: bool, aim_mode: int, aim: Ve
 	if status != Status.READY:
 		return
 	_seq += 1
-	_ws.send(NetProtocol.encode_input({"epoch": epoch, "seq": _seq, "axis": axis, "sprint": sprint,
-			"shoot": shoot, "aim_mode": aim_mode, "aim": aim, "actions": actions}))
+	var frame := NetProtocol.encode_input({"epoch": epoch, "seq": _seq, "axis": axis, "sprint": sprint,
+			"shoot": shoot, "aim_mode": aim_mode, "aim": aim, "actions": actions})
+	_count(tx_stats, frame)
+	_ws.send(frame)
+
+static func _count(table: Dictionary, bytes: PackedByteArray) -> void:
+	var type := int(bytes[1]) if bytes.size() > 1 else 0
+	var slot: Dictionary = table.get(type, {"count": 0, "bytes": 0})
+	slot.count += 1
+	slot.bytes += bytes.size()
+	table[type] = slot
 
 func new_action(kind: int, aim_mode := NetProtocol.AIM_NONE, aim := Vector2.ZERO) -> Dictionary:
 	return _action(kind, aim_mode, aim)

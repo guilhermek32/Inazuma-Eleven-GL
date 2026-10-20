@@ -9,7 +9,7 @@ extends RefCounted
 ## y in ±0.78); `to_3d()` projects those onto the Godot world.
 
 enum PlayerRole { GOALKEEPER, DEFENDER, MIDFIELDER, ATTACKER }
-enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME, MATCH_SETUP }
+enum GameState { MENU, HOWTO, SETTINGS, PLAYING, PAUSED, FULLTIME, MATCH_SETUP, ONLINE }   # ONLINE: the Play Online menu (create, join, waiting room, stats)
 
 # Device codes for per-team input assignment (see MatchSetup / InputReader).
 # A pad device id (>= 0, as returned by Input.get_connected_joypads) means that

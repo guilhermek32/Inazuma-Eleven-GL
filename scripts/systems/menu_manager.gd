@@ -1,10 +1,16 @@
 class_name MenuManager
 extends Node
 
-## Builds and drives all menu panels (main, how-to, settings, pause, full-time).
+## Builds and drives all menu panels (main, how-to, settings, pause, full-time)
+## and owns the Play Online screens (`online`, an OnlineMenu).
 ## `controller` is the match controller it asks to change game state / start a
 ## match; `settings` backs the settings panel. The controller owns the state
 ## machine and calls show_for_state()/refresh on transitions.
+##
+## For browser automation every shown page logs one line
+##   [ui] <page> <id>=<x>,<y> ...
+## with the centre, in window pixels, of each visible control tagged with a
+## "ui_id" meta (see log_layout()).
 
 var controller
 var settings: SettingsStore
@@ -13,6 +19,9 @@ var menu_panels := {}
 var fulltime_label: Label
 # One [value A label, value B label] pair per FULLTIME_STAT_ROWS entry.
 var fulltime_stat_labels: Array = []
+var online: OnlineMenu
+var rematch_button: Button
+var new_online_button: Button
 
 func build_menus() -> void:
 	menu_layer = CanvasLayer.new()
@@ -24,6 +33,12 @@ func build_menus() -> void:
 	_build_settings_panel()
 	_build_pause_panel()
 	_build_fulltime_panel()
+	online = OnlineMenu.new()
+	online.name = "OnlineMenu"
+	online.controller = controller
+	online.settings = settings
+	add_child(online)
+	online.build(menu_layer)
 
 func _make_panel(panel_name: String, dim := true) -> Control:
 	var panel := Control.new()
@@ -57,8 +72,10 @@ func _make_title(parent: Control, text: String, size := 64) -> Label:
 	parent.add_child(label)
 	return label
 
-func _make_button(parent: Control, text: String, handler: Callable) -> Button:
+func _make_button(parent: Control, text: String, handler: Callable, ui_id := "") -> Button:
 	var button := Button.new()
+	if ui_id != "":
+		button.set_meta("ui_id", ui_id)
 	button.text = text
 	button.custom_minimum_size = Vector2(320, 52)
 	button.add_theme_font_size_override("font_size", 26)
@@ -75,7 +92,8 @@ func _build_main_menu() -> void:
 	var vb := _make_vbox(panel)
 	_make_title(vb, "INAZUMA ELEVEN", 72)
 	_make_title(vb, "GL", 32).add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	_make_button(vb, "Play Now", func() -> void: controller._set_game_state(GameConfig.GameState.MATCH_SETUP))
+	_make_button(vb, "Play Now", func() -> void: controller._set_game_state(GameConfig.GameState.MATCH_SETUP), "play_now")
+	_make_button(vb, "Play Online", func() -> void: controller._set_game_state(GameConfig.GameState.ONLINE), "play_online")
 	_make_button(vb, "How to Play", func() -> void: controller._set_game_state(GameConfig.GameState.HOWTO))
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Quit", func() -> void: controller.get_tree().quit())
@@ -128,8 +146,16 @@ func _build_fulltime_panel() -> void:
 		grid.add_child(name_lbl)
 		grid.add_child(val_b)
 		fulltime_stat_labels.append([val_a, val_b])
-	_make_button(vb, "Rematch", func() -> void: controller._start_match())
-	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU))
+	rematch_button = _make_button(vb, "Rematch", func() -> void: controller._start_match(), "rematch")
+	new_online_button = _make_button(vb, "New Online Match", func() -> void: controller._set_game_state(GameConfig.GameState.ONLINE), "new_online")
+	new_online_button.visible = false
+	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU), "back_to_menu")
+
+## Online matches end with "New Online Match" (back to the lobby screens)
+## instead of an offline "Rematch".
+func set_fulltime_online(is_online: bool) -> void:
+	rematch_button.visible = not is_online
+	new_online_button.visible = is_online
 
 func _stats_cell(text: String, align: int) -> Label:
 	var lbl := Label.new()
@@ -234,10 +260,16 @@ func _make_volume_slider(getter: Callable, setter: Callable) -> HSlider:
 func show_for_state(state: int) -> void:
 	for key in menu_panels:
 		(menu_panels[key] as Control).visible = false
+	online.panel.visible = state == GameConfig.GameState.ONLINE
+	if state == GameConfig.GameState.ONLINE:
+		online.show_page("home")
+		return
 	var active: Control = null
+	var page := ""
 	match state:
 		GameConfig.GameState.MENU:
 			active = menu_panels.main
+			page = "main"
 		GameConfig.GameState.HOWTO:
 			active = menu_panels.howto
 		GameConfig.GameState.SETTINGS:
@@ -246,9 +278,36 @@ func show_for_state(state: int) -> void:
 			active = menu_panels.pause
 		GameConfig.GameState.FULLTIME:
 			active = menu_panels.fulltime
+			page = "fulltime"
 	if active != null:
 		active.visible = true
 		_focus_first_button(active)
+	if page != "":
+		log_layout(active, page)
+
+## Prints "[ui] <page> <id>=<x>,<y> ..." for every visible control under `root`
+## tagged with a "ui_id" meta: its centre in window pixels, after the layout of
+## the next frames has settled. Read by the browser e2e tests to click controls.
+static func log_layout(root: Control, page: String) -> void:
+	for i in 2:
+		await root.get_tree().process_frame
+	if not root.is_visible_in_tree():
+		return
+	var parts: PackedStringArray = []
+	_collect_layout(root, parts)
+	print("[ui] %s %s" % [page, " ".join(parts)])
+
+static func _collect_layout(node: Node, parts: PackedStringArray) -> void:
+	if node is Control:
+		var c := node as Control
+		if not c.visible:
+			return
+		if c.has_meta("ui_id"):
+			var xf := c.get_viewport().get_screen_transform() * c.get_global_transform_with_canvas()
+			var centre := xf * (c.size * 0.5)
+			parts.append("%s=%d,%d" % [c.get_meta("ui_id"), roundi(centre.x), roundi(centre.y)])
+	for child in node.get_children():
+		_collect_layout(child, parts)
 
 func _focus_first_button(node: Control) -> bool:
 	if node is Button and node.focus_mode != Control.FOCUS_NONE and node.visible and not (node as Button).disabled:
