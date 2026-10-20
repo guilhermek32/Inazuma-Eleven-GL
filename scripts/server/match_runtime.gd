@@ -47,7 +47,17 @@ const MAX_ROOMS := 32
 const HANDSHAKE_TIMEOUT_MS := 5000
 # Generous: a browser may stall for seconds compiling shaders right after it connects.
 const HELLO_TIMEOUT_MS := 15000
-const MAX_QUEUED_PACKETS := 64
+# Godot refuses to queue more than max_queued_packets or outbound_buffer_size:
+# both sit well above OUTBOUND_SOFT_LIMIT so congestion is seen (and handled)
+# before sends start failing.
+const MAX_QUEUED_PACKETS := 2048
+const OUTBOUND_BUFFER_BYTES := 512 * 1024
+# Connections that have not sent a valid HELLO yet. Capped separately so idle
+# sockets can't occupy the slots players (and reconnects) need.
+const MAX_PENDING_PEERS := 16
+# A dropped peer is polled this long so its ERROR + close frame are flushed
+# (a FIN, not a reset that the client would see as 1006).
+const CLOSING_LINGER_MS := 1000
 const OUTBOUND_SOFT_LIMIT := 64 * 1024
 const CONGESTION_LIMIT_MS := 5000
 const PATH_PREFIX := "/ws/game/"
@@ -78,6 +88,8 @@ var _tcp := TCPServer.new()
 var _next_id := 1
 # peer_id -> {ws, since, open, match_id, team, congested_since}
 var _peers := {}
+# Dropped peers still flushing their close frame: [{ws, since}].
+var _closing: Array = []
 var _rooms := {}   # match_id -> MatchRoom
 
 func _init() -> void:
@@ -88,6 +100,8 @@ func _init() -> void:
 func open_storage(dir: String) -> Error:
 	data_dir = dir
 	var err := DirAccess.make_dir_recursive_absolute(dir)
+	if err == OK:
+		err = _probe_writable(dir)
 	if err != OK:
 		log_event("storage_failed", {"dir": dir, "error": error_string(err)})
 		return err
@@ -95,6 +109,16 @@ func open_storage(dir: String) -> Error:
 	err = spool.open(dir.path_join("spool"))
 	log_event("storage_opened", {"dir": dir, "terminal": registry.size(), "pending_results": spool.pending_ids().size()})
 	return err
+
+## An existing but read-only directory (e.g. a volume left owned by root) must
+## fail loudly here: otherwise results and terminal ids would be silently lost.
+static func _probe_writable(dir: String) -> Error:
+	var probe := dir.path_join(".write_probe")
+	var f := FileAccess.open(probe, FileAccess.WRITE)
+	if f == null:
+		return FileAccess.get_open_error()
+	f.close()
+	return DirAccess.remove_absolute(probe)
 
 ## Starts the internal control API (see RuntimeControlApi) on its own port.
 func start_control(port: int, bind_address := "*", token := "") -> Error:
@@ -156,12 +180,13 @@ func _physics_process(delta: float) -> void:
 func poll() -> void:
 	while _tcp.is_connection_available():
 		var conn := _tcp.take_connection()
-		if _peers.size() >= max_connections:
+		if _peers.size() >= max_connections or _pending_count() >= MAX_PENDING_PEERS:
 			conn.disconnect_from_host()
-			log_event("connection_refused", {"reason": "capacity"})
+			log_event("connection_refused", {"reason": "capacity" if _peers.size() >= max_connections else "pending_capacity"})
 			continue
 		var ws := WebSocketPeer.new()
 		ws.inbound_buffer_size = NetProtocol.MAX_MESSAGE_BYTES
+		ws.outbound_buffer_size = OUTBOUND_BUFFER_BYTES
 		ws.max_queued_packets = MAX_QUEUED_PACKETS
 		ws.accept_stream(conn)
 		_peers[_next_id] = {"ws": ws, "since": Time.get_ticks_msec(), "open": false, "match_id": "", "team": -1, "congested_since": 0}
@@ -169,6 +194,24 @@ func poll() -> void:
 	for id in _peers.keys():
 		if _peers.has(id):
 			_poll_peer(id)
+	_poll_closing()
+
+func _pending_count() -> int:
+	var n := 0
+	for entry in _peers.values():
+		if entry.team < 0:
+			n += 1
+	return n
+
+func _poll_closing() -> void:
+	var now := Time.get_ticks_msec()
+	var still: Array = []
+	for c in _closing:
+		var ws: WebSocketPeer = c.ws
+		ws.poll()
+		if ws.get_ready_state() != WebSocketPeer.STATE_CLOSED and now - int(c.since) < CLOSING_LINGER_MS:
+			still.append(c)
+	_closing = still
 
 func _poll_peer(id: int) -> void:
 	var entry: Dictionary = _peers[id]
@@ -392,7 +435,15 @@ func send_to(peer_id: int, bytes: PackedByteArray, droppable: bool) -> void:
 			return
 	else:
 		entry.congested_since = 0
-	ws.send(bytes)
+	if ws.send(bytes) != OK:
+		# The queue is full even so: a snapshot can wait, but an event, WELCOME or
+		# baseline that can't be queued would desync the client, so drop it.
+		if droppable:
+			if int(entry.congested_since) == 0:
+				entry.congested_since = Time.get_ticks_msec()
+			return
+		log_event("peer_too_slow", {"peer": peer_id, "reason": "send_failed"})
+		_drop(peer_id, NetProtocol.CLOSE_TOO_SLOW, "connection too slow")
 
 func close_peer(peer_id: int, code: int, reason: String) -> void:
 	_drop(peer_id, code, reason)
@@ -411,6 +462,7 @@ func _drop(id: int, code := 1000, reason := "") -> void:
 		if code >= 4000:
 			ws.send(NetProtocol.encode_error(code, reason))
 		ws.close(code, reason)
+		_closing.append({"ws": ws, "since": Time.get_ticks_msec()})
 	_forget(id, code)
 
 func _forget(id: int, code: int) -> void:

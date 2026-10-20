@@ -237,6 +237,11 @@ func _test_request_parser() -> void:
 			and ControlServer.parse_request("NONSENSE\r\n\r\n".to_utf8_buffer()).get("error") == 400
 			and ControlServer.parse_request("GET / HTTP/1.1\r\nContent-Length: -1\r\n\r\n".to_utf8_buffer()).get("error") == 400,
 			"oversized, chunked and malformed requests are refused")
+	var overflow_ok := true
+	for cl in ["9223372036854775807", "99999999999999999999", "18446744073709551615"]:
+		if ControlServer.parse_request(("PUT /a HTTP/1.1\r\nContent-Length: %s\r\n\r\n" % cl).to_utf8_buffer()).get("error") != 413:
+			overflow_ok = false
+	_check(overflow_ok, "an overflowing Content-Length is refused as too large, not parsed as complete")
 
 # --- control API ----------------------------------------------------------------------------
 

@@ -14,3 +14,10 @@ services:
       target: match-runtime-dev
     environment:
       DEV_NO_AUTH: "1"
+    # The debug image runs as root: keep its state off the production volume,
+    # which the release runtime (uid 10001) must be able to write.
+    volumes:
+      - runtime-data-dev:/data
+
+volumes:
+  runtime-data-dev: {}

@@ -34,6 +34,8 @@ func _run() -> void:
 	await _test_hello_rules()
 	await _test_online_match()
 	await _test_forfeit()
+	await _test_per_team_grace()
+	await _test_pending_connection_cap()
 	runtime.stop()
 	if failures == 0:
 		print("ALL TESTS PASSED")
@@ -458,3 +460,54 @@ func _test_forfeit() -> void:
 	_check(await _pump_until([c0], func() -> bool: return c0.status == NetClient.Status.CLOSED, 300)
 			and c0.close_code == NetProtocol.CLOSE_MATCH_OVER and runtime.room("m2") == null,
 			"the finished room is closed and freed")
+
+## Each absent team gets its own reconnect deadline: red drops, blue drops later,
+## red returns; blue must keep its full grace (not red's leftover).
+func _test_per_team_grace() -> void:
+	var a := _client("m3", "dev:0")
+	var b := _client("m3", "dev:1")
+	var c0: NetClient = a[0]
+	var c1: NetClient = b[0]
+	var ev0: Array = a[1]
+	await _pump_until([c0, c1], func() -> bool: return _has_event(ev0, "kickoff"))
+	var room := runtime.room("m3")
+	room.reconnect_grace_ms = 1500
+	var t0 := Time.get_ticks_msec()
+	c0.close()
+	await _pump_until([c0, c1], func() -> bool: return Time.get_ticks_msec() - t0 > 700, 600)
+	c1.close()
+	await _pump_until([c0, c1], func() -> bool: return Time.get_ticks_msec() - t0 > 900, 600)
+	var back := _client("m3", "dev:0")
+	var c0b: NetClient = back[0]
+	var ev0b: Array = back[1]
+	await _pump_until([c0b], func() -> bool: return c0b.is_ready(), 600)
+	# Red's own deadline (t0 + 1.5 s) passes while blue is still inside its grace.
+	await _pump_until([c0b], func() -> bool: return Time.get_ticks_msec() - t0 > 1900, 600)
+	_check(room.state == MatchRoom.State.PAUSED, "a second absence gets its own grace, not the first one's leftover")
+	_check(await _pump_until([c0b], func() -> bool: return _has_event(ev0b, "match_over"), 600)
+			and _find_event(ev0b, "match_over").get("winner") == 0, "the team still away past its own deadline forfeits")
+	c0b.close()
+	await _pump([c0b], 10)
+
+## Connections that never send HELLO are capped, so they can't take every slot.
+func _test_pending_connection_cap() -> void:
+	var idle: Array[WebSocketPeer] = []
+	for i in MatchRuntime.MAX_PENDING_PEERS + 4:
+		var ws := WebSocketPeer.new()
+		ws.connect_to_url(_url("/ws/game/idle"))
+		idle.append(ws)
+	for i in 60:
+		for ws in idle:
+			ws.poll()
+		await physics_frame
+	var held := runtime.connection_count()
+	_check(held > 0 and held <= MatchRuntime.MAX_PENDING_PEERS,
+			"the runtime holds at most %d connections that haven't sent HELLO (%d)" % [MatchRuntime.MAX_PENDING_PEERS, held])
+	var a := _client("m4", "dev:0")
+	for ws in idle:
+		ws.close()
+	await _pump([], 20)
+	var c0: NetClient = a[0]
+	_check(await _pump_until([c0], func() -> bool: return c0.is_ready(), 600), "a real player still gets in once idle sockets go away")
+	c0.close()
+	await _pump([c0], 10)

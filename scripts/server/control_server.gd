@@ -163,6 +163,10 @@ static func parse_request(data: PackedByteArray) -> Dictionary:
 		var cl: String = headers["content-length"]
 		if not cl.is_valid_int() or int(cl) < 0:
 			return {"error": 400, "message": "bad Content-Length"}
+		# Checked before any arithmetic: a huge value would clamp to INT64_MAX and
+		# wrap body_start + length negative, slipping past both checks below.
+		if cl.length() > 7 or int(cl) > MAX_REQUEST_BYTES:
+			return {"error": 413, "message": "request too large"}
 		length = int(cl)
 	var body_start := end + 4
 	if body_start + length > MAX_REQUEST_BYTES:

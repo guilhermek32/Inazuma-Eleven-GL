@@ -5,8 +5,11 @@ extends RefCounted
 ##
 ## Lifecycle: WAITING (until both team slots are attached, or the waiting
 ## deadline cancels it) -> RUNNING <-> PAUSED (a player dropped; the match
-## freezes for up to RECONNECT_GRACE_MS of real time, then that player
-## forfeits) -> FINISHED (full time, forfeit or cancelled; the room lingers a
+## freezes while anyone is away. Each absent team has its own deadline:
+## RECONNECT_GRACE_MS of real time per absence, but at most
+## MAX_TOTAL_PAUSE_MS of absence per team over the match, so repeated
+## drop-and-reconnect can't stall it forever; the first team past its
+## deadline forfeits) -> FINISHED (full time, forfeit or cancelled; the room lingers a
 ## moment so the final events reach the clients, then the runtime frees it).
 ##
 ## Each room tick: apply every team's RemoteInputQueue, step the session,
@@ -29,6 +32,7 @@ enum State { WAITING, RUNNING, PAUSED, FINISHED }
 const TICK_RATE := 60
 const SNAPSHOT_EVERY := 2
 const RECONNECT_GRACE_MS := 30000
+const MAX_TOTAL_PAUSE_MS := 60000
 const WAITING_DEADLINE_MS := 300000
 # Long enough for a stalled browser (software-rendered, a few fps) to read the
 # final events before the close: native WebSocketPeer drops unread packets on close.
@@ -38,6 +42,7 @@ const DISCONTINUOUS_EVENTS := ["field_reset", "restart", "half_time"]
 
 # Deadlines (real time); tests shorten them.
 var reconnect_grace_ms := RECONNECT_GRACE_MS
+var max_total_pause_ms := MAX_TOTAL_PAUSE_MS
 var waiting_deadline_ms := WAITING_DEADLINE_MS
 
 var match_id: String
@@ -64,7 +69,10 @@ var _close: Callable
 var _event_seq := 0
 var _discontinuity := true
 var _created_ms := 0
-var _paused_until_ms := 0
+# Per team: when its current absence started (0 = present) and the absence
+# time already used in earlier pauses.
+var _absent_since_ms: Array[int] = [0, 0]
+var _paused_total_ms: Array[int] = [0, 0]
 var _finished_ticks := 0
 
 func _init(p_match_id: String, p_config: MatchConfig, seed_value: int, send: Callable, close: Callable) -> void:
@@ -114,6 +122,9 @@ func attach(team: int, peer_id: int) -> int:
 		elif state == State.PAUSED:
 			state = State.RUNNING
 			_broadcast_event({"type": "resumed"})
+	if _absent_since_ms[team] > 0:
+		_paused_total_ms[team] += Time.get_ticks_msec() - _absent_since_ms[team]
+		_absent_since_ms[team] = 0
 	return slot.epoch
 
 ## The peer's connection ended. A running match pauses for the reconnect grace.
@@ -124,10 +135,15 @@ func detach(peer_id: int) -> void:
 	var slot: Dictionary = slots[team]
 	slot.peer = -1
 	(slot.queue as RemoteInputQueue).reset(slot.epoch)
-	if state == State.RUNNING:
+	if state == State.RUNNING or state == State.PAUSED:
 		state = State.PAUSED
-		_paused_until_ms = Time.get_ticks_msec() + reconnect_grace_ms
-		_broadcast_event({"type": "paused", "team": team, "grace_s": reconnect_grace_ms / 1000.0})
+		_absent_since_ms[team] = Time.get_ticks_msec()
+		_broadcast_event({"type": "paused", "team": team, "grace_s": _grace_ms(team) / 1000.0})
+
+## This team's grace for its current absence: the per-absence grace, capped by
+## what is left of its total pause budget.
+func _grace_ms(team: int) -> int:
+	return clampi(max_total_pause_ms - _paused_total_ms[team], 0, reconnect_grace_ms)
 
 func on_input(peer_id: int, frame: Dictionary) -> void:
 	var team := team_of(peer_id)
@@ -153,9 +169,11 @@ func step(dt: float) -> void:
 			if now - _created_ms > waiting_deadline_ms:
 				_finish("cancelled", -1)
 		State.PAUSED:
-			if now >= _paused_until_ms:
-				var present := 0 if is_attached(0) else (1 if is_attached(1) else -1)
-				_finish("forfeit", present)
+			for t in 2:
+				if _absent_since_ms[t] > 0 and now >= _absent_since_ms[t] + _grace_ms(t):
+					# The other team wins if it is here; with both gone, nobody does.
+					_finish("forfeit", (1 - t) if is_attached(1 - t) else -1)
+					break
 		State.RUNNING:
 			for t in 2:
 				(slots[t].queue as RemoteInputQueue).apply(session.sim.teams[t].input, tick)

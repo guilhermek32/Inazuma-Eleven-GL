@@ -37,7 +37,10 @@ func _ready() -> void:
 	if runtime.match_secret.is_empty():
 		MatchRuntime.log_event("config_warning", {"reason": "MATCH_SECRET unset: signed credentials are refused"})
 	var data_dir := OS.get_environment("RUNTIME_DATA_DIR")
-	runtime.open_storage(data_dir if data_dir != "" else DEFAULT_DATA_DIR)
+	if runtime.open_storage(data_dir if data_dir != "" else DEFAULT_DATA_DIR) != OK:
+		# No durable storage = finished results would be lost: refuse to serve.
+		get_tree().quit(1)
+		return
 	runtime.spool.configure(OS.get_environment("RESULTS_URL"), OS.get_environment("RESULTS_INGEST_TOKEN"))
 	add_child(runtime)
 	MatchRuntime.log_event("runtime_started", {"boot_id": runtime.boot_id,
