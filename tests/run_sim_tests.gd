@@ -51,6 +51,7 @@ func _initialize() -> void:
 	_test_session_halves_and_full_time()
 	_test_session_slowmo_is_per_session()
 	_test_session_restart_reinitializes()
+	_test_cancelled_charge_is_dropped()
 	if failures == 0:
 		print("ALL TESTS PASSED")
 	else:
@@ -621,6 +622,31 @@ func _test_switch_targets_predicted_ball() -> void:
 	sim.teams[0].switch_candidate = -1
 	sim._handle_user_selection(sim.teams[0])
 	_check(sim.teams[0].switch_candidate == 9, "switch candidate is the interceptor of the rolling ball")
+	sim.free()
+
+## Online, a silent or reconnecting client's charge is cancelled (neither
+## held nor just released): the carrier must not keep the stored power.
+func _test_cancelled_charge_is_dropped() -> void:
+	var sim := _make_sim()
+	sim.reset_game(-1)   # red kicks off: red's selected player carries the ball
+	sim.restart_timer = 0.0
+	var ts := sim.teams[0]
+	var carrier: PlayerState = sim.owner_player()
+	for opp in sim.teams[1].players:   # nobody near enough to tackle
+		opp.x = 0.85
+		opp.start_x = 0.85
+	var snap := InputSnapshot.new()
+	snap.shoot_held = true
+	ts.input = snap
+	for i in 30:
+		snap.shoot_prev = snap.shoot_held
+		sim.step(1.0 / 60.0)
+	var charged := carrier.kick_power
+	snap.shoot_held = false
+	snap.shoot_prev = false
+	sim.step(1.0 / 60.0)
+	_check(charged > 0.3 and carrier.kick_power == 0.0 and sim.ball.charging_power == 0.0 and sim.ball.owner_team == 0,
+			"a cancelled charge is dropped without a kick (charged %.2f)" % charged)
 	sim.free()
 
 func _test_switch_ends() -> void:

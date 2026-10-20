@@ -545,6 +545,11 @@ func _update_user_player(p: PlayerState, snap: InputSnapshot, team_idx: int, pla
 			p.kick_power = minf(1.0, p.kick_power + delta * GameConfig.CHARGE_RATE)
 		elif snap.shoot_prev:
 			kick_from_player(p, _aim_target(snap, p), p.kick_power, true)
+		elif p.kick_power > 0.0:
+			# Neither held nor just released: the charge was cancelled (online, by a
+			# silent or reconnecting client). Drop it, or the next tap fires at full power.
+			p.kick_power = 0.0
+			ball.charging_power = 0.0
 	else:
 		# Not the ball carrier: never charging a kick.
 		p.kick_power = 0.0

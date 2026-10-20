@@ -348,9 +348,13 @@ func _on_net_closed(code: int, reason: String) -> void:
 	elif game_state != GameConfig.GameState.FULLTIME:
 		# A finished match closes the connection after its final events: nothing to report.
 		menu.set_fulltime_text("CONNECTION CLOSED\n%s\n(code %d)" % [why, code])
+		menu.clear_fulltime_stats()
 		menu.set_fulltime_online(true)
 		_set_game_state(GameConfig.GameState.FULLTIME)
-	_leave_online.call_deferred()
+	# Deferred, and only for the connection that closed: a lobby reply in the same
+	# frame may already have started the next one.
+	var closed_net := net
+	(func() -> void: if net == closed_net: _leave_online()).call_deferred()
 
 func _leave_online() -> void:
 	if net == null:
@@ -358,6 +362,7 @@ func _leave_online() -> void:
 	net.close()
 	net = null
 	_online_state = {}
+	hud.reset()   # online banners ("waiting for opponent"...) end with the session
 	for t in 2:
 		session.set_team_device(t, _lineup_devices[t])
 
@@ -387,10 +392,15 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		match game_state:
 			GameConfig.GameState.PLAYING:
-				# An online match can't be paused locally; Esc leaves it.
-				if net != null:
+				if net == null:
+					_set_game_state(GameConfig.GameState.PAUSED)
+				elif event is InputEventKey:
+					# An online match can't be paused locally; keyboard Esc leaves it. A
+					# pad's Start (also ui_cancel) must not abandon the match by accident.
 					print("[online] left the match")
-				_set_game_state(GameConfig.GameState.MENU if net != null else GameConfig.GameState.PAUSED)
+					_set_game_state(GameConfig.GameState.MENU)
+				else:
+					hud.show_banner("ONLINE MATCH - PRESS ESC TO LEAVE", Color(0.8, 0.9, 1.0), 1.5, false)
 			GameConfig.GameState.ONLINE:
 				menu.online.back()
 			GameConfig.GameState.PAUSED:
@@ -514,6 +524,7 @@ func _end_match(ev: Dictionary) -> void:
 			result = "TIME A WINS" if ev.winner == 0 else ("TIME B WINS" if ev.winner == 1 else "NO WINNER")
 		"cancelled":
 			title = "MATCH CANCELLED"
+			result = "No match was played"
 	menu.set_fulltime_text("%s\n%d - %d\n%s" % [title, ev.score_left, ev.score_right, result])
 	# Online stats arrive as plain JSON arrays; the menu wants Array[Dictionary].
 	var stats: Array[Dictionary] = []

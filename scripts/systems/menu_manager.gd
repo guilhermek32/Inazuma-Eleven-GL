@@ -223,6 +223,13 @@ func _build_settings_panel() -> void:
 		settings.save()
 		controller._apply_weather())
 	_settings_row(vb, "Weather", weather_opt)
+	# A running match keeps the rules it kicked off with (its MatchConfig).
+	var rules_note := Label.new()
+	rules_note.text = "Difficulty, match length, rules and weather apply from the next match."
+	rules_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rules_note.add_theme_font_size_override("font_size", 16)
+	rules_note.add_theme_color_override("font_color", Color(0.75, 0.82, 0.95))
+	vb.add_child(rules_note)
 
 	var fs_check := CheckButton.new()
 	fs_check.button_pressed = settings.fullscreen
@@ -326,6 +333,12 @@ func set_fulltime_text(text: String) -> void:
 ## Fills the full-time stats table. Possession is shown as percentages of the
 ## combined ownership time; the other rows are plain counters. The value columns
 ## are tinted with each team's shirt colour.
+## Blanks the full-time stats grid (a match that ended without a result).
+func clear_fulltime_stats() -> void:
+	for pair in fulltime_stat_labels:
+		pair[0].text = "-"
+		pair[1].text = "-"
+
 func set_fulltime_stats(stats: Array[Dictionary], col_a: Color, col_b: Color) -> void:
 	var total_poss: float = maxf(0.001, stats[0].possession + stats[1].possession)
 	for i in FULLTIME_STAT_ROWS.size():
@@ -335,7 +348,8 @@ func set_fulltime_stats(stats: Array[Dictionary], col_a: Color, col_b: Color) ->
 			pair[0].text = "%d%%" % roundi(stats[0].possession / total_poss * 100.0)
 			pair[1].text = "%d%%" % roundi(stats[1].possession / total_poss * 100.0)
 		else:
-			pair[0].text = str(stats[0][key])
-			pair[1].text = str(stats[1][key])
+			# Counts; online they come back from JSON as floats ("3.0").
+			pair[0].text = str(int(stats[0][key]))
+			pair[1].text = str(int(stats[1][key]))
 		pair[0].add_theme_color_override("font_color", col_a.lightened(0.35))
 		pair[1].add_theme_color_override("font_color", col_b.lightened(0.35))

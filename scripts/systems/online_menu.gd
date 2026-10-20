@@ -266,6 +266,10 @@ func _load_stats() -> void:
 	recent_label.text = format_recent(recent) if recent.ok else LobbyClient.describe(recent)
 	var board: Dictionary = await lobby.leaderboard(8)
 	board_label.text = format_board(board) if board.ok else LobbyClient.describe(board)
+	# The player may have gone Back meanwhile: the home buttons were disabled
+	# while these requests were in flight.
+	if page == "home":
+		_set_busy(false)
 
 static func format_recent(reply: Dictionary) -> String:
 	var lines: PackedStringArray = []
