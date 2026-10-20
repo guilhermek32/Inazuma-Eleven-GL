@@ -5,6 +5,12 @@ extends RefCounted
 ## shell (stands, walls, hoardings, crowd). `host` receives the top-level nodes
 ## (environment/camera/lights); `stadium_root` the structure.
 ## After `build_camera()`, read back `camera_rig`/`camera_3d`.
+##
+## `web_tier` (set before any build_* call, see RenderTier) selects the
+## Compatibility-renderer variant: no SSAO/SSIL/volumetric fog/VoxelGI (they
+## don't exist there), compensated by the WEB_* ambient, depth fog and glow
+## values below; fewer shadowed floodlights and a thinner crowd. With it unset
+## every build_* call produces the desktop Forward+ look unchanged.
 
 # Stand placement, as fractions of FIELD_SCALE. The /18.0 denominators are legacy
 # proportions from when the pitch spanned 18 world units; kept so the stadium keeps
@@ -22,12 +28,32 @@ var voxel_gi: VoxelGI
 var rain: GPUParticles3D
 # Environment handle kept so weather can retune fog/ambience at runtime.
 var env: Environment
+var web_tier := false
 
 # Fog/ambience per weather: clear stays a faint haze; rain gets denser and dimmer.
 const FOG_DENSITY_CLEAR := 0.004
 const FOG_DENSITY_RAIN := 0.006
 const AMBIENT_ENERGY_CLEAR := 0.4
 const AMBIENT_ENERGY_RAIN := 0.28
+
+# Web tier (Compatibility) compensation. Without GI bounce and SSIL the turf and
+# stands lose their fill light, so ambient is raised; standard depth fog stands
+# in for the volumetric haze (far end falls off into the night); a little more
+# glow keeps the floodlamps and neon boards reading as light sources.
+const WEB_AMBIENT_ENERGY_CLEAR := 0.62
+const WEB_AMBIENT_ENERGY_RAIN := 0.46
+const WEB_FOG_DENSITY_CLEAR := 0.0045
+const WEB_FOG_DENSITY_RAIN := 0.0075
+const WEB_FOG_COLOR := Color(0.16, 0.19, 0.25)
+const WEB_GLOW_INTENSITY := 0.8
+const WEB_GLOW_BLOOM := 0.25
+# Only these towers cast shadows on the web (the far pair: their shadows fall
+# toward the broadcast camera); each shadowed spot is an extra scene pass there.
+const WEB_SHADOW_TOWERS := [0, 1]
+const WEB_SHADOW_ATLAS_SIZE := 2048
+# Crowd banks: rows per stand and seat spacing (FULL uses 7 rows, 0.6 spacing).
+const WEB_CROWD_ROWS := 5
+const WEB_CROWD_SPACING := 0.85
 
 ## One GPU particle emitter of falling streak quads over the pitch; built once,
 ## toggled by set_rain_active() when the Weather setting changes.
@@ -66,7 +92,10 @@ func set_rain_active(active: bool) -> void:
 	rain.emitting = active
 	rain.visible = active
 	# Rain nights read moodier: slightly denser fog and dimmer ambient fill.
-	if env != null:
+	if env != null and web_tier:
+		env.fog_density = WEB_FOG_DENSITY_RAIN if active else WEB_FOG_DENSITY_CLEAR
+		env.ambient_light_energy = WEB_AMBIENT_ENERGY_RAIN if active else WEB_AMBIENT_ENERGY_CLEAR
+	elif env != null:
 		env.volumetric_fog_density = FOG_DENSITY_RAIN if active else FOG_DENSITY_CLEAR
 		env.ambient_light_energy = AMBIENT_ENERGY_RAIN if active else AMBIENT_ENERGY_CLEAR
 
@@ -102,6 +131,11 @@ func build_environment() -> void:
 	env.glow_strength = 1.2
 	env.glow_bloom = 0.2
 	env.glow_hdr_threshold = 1.1
+	if web_tier:
+		_apply_web_environment()
+		world.environment = env
+		host.add_child(world)
+		return
 	# SSAO: screen-space ambient occlusion darkens contact areas (players on grass,
 	# inside goal mouth, stand tiers) without expensive ray-traced GI.
 	env.ssao_enabled = true
@@ -128,6 +162,18 @@ func build_environment() -> void:
 	world.environment = env
 	host.add_child(world)
 
+## Compatibility stand-ins for the Forward+-only effects (see the WEB_* constants).
+func _apply_web_environment() -> void:
+	env.ambient_light_energy = WEB_AMBIENT_ENERGY_CLEAR
+	env.glow_intensity = WEB_GLOW_INTENSITY
+	env.glow_bloom = WEB_GLOW_BLOOM
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	env.fog_light_color = WEB_FOG_COLOR
+	env.fog_light_energy = 1.0
+	env.fog_density = WEB_FOG_DENSITY_CLEAR
+	env.fog_sky_affect = 0.0
+
 func build_camera() -> void:
 	camera_rig = Node3D.new()
 	camera_rig.name = "CameraRig"
@@ -147,7 +193,7 @@ func build_lighting() -> void:
 	# coarse for cones firing across the whole pitch from the corners).
 	var vp := host.get_viewport()
 	if vp != null:
-		vp.positional_shadow_atlas_size = 4096
+		vp.positional_shadow_atlas_size = WEB_SHADOW_ATLAS_SIZE if web_tier else 4096
 		vp.positional_shadow_atlas_quad_0 = Viewport.SHADOW_ATLAS_QUADRANT_SUBDIV_1
 		vp.positional_shadow_atlas_quad_1 = Viewport.SHADOW_ATLAS_QUADRANT_SUBDIV_4
 	var moon := DirectionalLight3D.new()
@@ -184,6 +230,8 @@ func build_lighting() -> void:
 # the controller, deferred one frame and before the dynamic players exist, so the
 # probe captures only static surfaces and the coloured neon spill bounces onto turf.
 func build_gi() -> void:
+	if web_tier:
+		return   # VoxelGI is Forward+-only; skipping it also skips the load-time bake
 	var s := GameConfig.FIELD_SCALE
 	voxel_gi = VoxelGI.new()
 	voxel_gi.name = "VoxelGI"
@@ -223,7 +271,14 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	tower.add_child(head)
 	head.look_at(Vector3.ZERO, Vector3.UP)
 	_build_lamp_bank(head)
-	# Warm omni accent at the head: local emissive halo around the fitting.
+	var casts_shadow := not web_tier or index in WEB_SHADOW_TOWERS
+	# Warm omni accent at the head: local emissive halo around the fitting. The web
+	# tier leaves it to the emissive lamp cells + glow (one light fewer per object).
+	if not web_tier:
+		_add_lamp_accent(head)
+	_add_floodlight_spot(head, casts_shadow)
+
+func _add_lamp_accent(head: Node3D) -> void:
 	var accent := OmniLight3D.new()
 	accent.name = "LampAccent"
 	accent.light_color = Color(0.9, 0.95, 1.0)
@@ -232,6 +287,8 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	accent.omni_attenuation = 2.0
 	accent.shadow_enabled = false
 	head.add_child(accent)
+
+func _add_floodlight_spot(head: Node3D, casts_shadow: bool) -> void:
 	# Spot (cone source): crisp falloff, specular highlights on players/posts.
 	# All four towers cast soft shadows for the classic overlapping-shadows look.
 	# Parented to the head and pushed out IN FRONT of the lamp cells so the fixture
@@ -247,7 +304,7 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	spot.light_size = 0.9        # tighter source → crisper, readable shadow edges
 	# Damp how much the beam feeds the volumetric fog: subtle shaft, not a white blob.
 	spot.light_volumetric_fog_energy = 0.35
-	spot.shadow_enabled = true
+	spot.shadow_enabled = casts_shadow
 	spot.shadow_blur = 0.6
 	spot.shadow_bias = 0.03
 	spot.position = Vector3(0.0, 0.0, -1.7)
@@ -419,10 +476,10 @@ func _add_crowd(field_x: float, field_z: float) -> void:
 	mixed.append_array(neutrals)
 	var skins := [Color(0.86, 0.66, 0.52), Color(0.72, 0.52, 0.38), Color(0.52, 0.36, 0.24), Color(0.94, 0.78, 0.62)]
 
-	var n_depth := 7
+	var n_depth := WEB_CROWD_ROWS if web_tier else 7
 	var depth_step := 0.55
 	var rise_step := 0.34
-	var col_spacing := 0.6
+	var col_spacing := WEB_CROWD_SPACING if web_tier else 0.6
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xC0DDED
 
