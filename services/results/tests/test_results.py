@@ -133,3 +133,30 @@ def test_leaderboard_ties_break_on_goal_difference_then_goals_for_and_paginate(c
 
 def test_health(client):
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def _cursor(values) -> str:
+    import base64
+    return base64.urlsafe_b64encode(json.dumps(values).encode()).decode().rstrip("=")
+
+
+@pytest.mark.parametrize("path,values", [
+    ("/v1/matches/recent", ["nope", "x"]),
+    ("/v1/matches/recent", [1, 2]),
+    ("/v1/matches/recent", ["2026-10-01T12:00:00+00:00", "not-a-uuid"]),
+    ("/v1/leaderboard", [1, 0, 0, "not-a-uuid"]),
+    ("/v1/leaderboard", [1e300, 0, 0, str(uuid.UUID(int=1))]),
+    ("/v1/leaderboard", [True, 0, 0, str(uuid.UUID(int=1))]),
+    ("/v1/leaderboard", [2**40, 0, 0, str(uuid.UUID(int=1))]),
+])
+def test_wrong_typed_cursors_are_a_400_not_a_500(client, path, values):
+    r = client.get(path, params={"cursor": _cursor(values)})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_cursor", (r.status_code, r.text)
+
+
+def test_naive_timestamps_and_nul_strings_are_rejected_as_invalid(client):
+    naive = {**result(A, B, 1, 0), "finished_at": "2026-10-01T12:00:00"}
+    assert post(client, naive).status_code == 422
+    doc = result(C, D, 1, 0)
+    doc["players"][0]["nickname"] = "a\u0000b"
+    assert post(client, doc).status_code == 422

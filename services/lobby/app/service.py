@@ -37,10 +37,11 @@ import uuid
 from psycopg import errors
 
 from . import credentials
-from .bot_client import DIFFICULTY_INDEX, FAILED_STATES, JOINED_STATES, BotClient, BotError, BotUnavailable, bot_player
+from .bot_client import (DIFFICULTIES, DIFFICULTY_INDEX, FAILED_STATES, JOINED_STATES, BotClient, BotError,
+                         BotUnavailable, bot_player)
 from .errors import Conflict, NotFound, Unavailable
 from .logs import log_event
-from .reconcile import ReconcileMixin
+from .reconcile import TERMINAL, ReconcileMixin
 from .runtime_client import RuntimeClient, RuntimeError_, RuntimeUnavailable
 
 ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -58,6 +59,9 @@ def match_config(half_length_s: int, bot_difficulty: str | None = None) -> dict:
 
 def new_room_code() -> str:
     return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(ROOM_CODE_LENGTH))
+
+
+_BOT_PLAYER_IDS = frozenset(str(bot_player(d)[0]) for d in DIFFICULTIES)
 
 
 class LobbyService(ReconcileMixin):
@@ -82,6 +86,9 @@ class LobbyService(ReconcileMixin):
                 continue
         else:
             raise Conflict("request_conflict", "request_id is being used concurrently")
+        if row["status"] in TERMINAL or int(row["expires_at"]) <= int(self.clock()):
+            # A late retry of a create whose room has since ended: no credential.
+            raise Conflict("room_closed", f"the room is not accepting players ({row['status']})")
         if row["status"] == "provisioning":
             self._provision(row)
             row["status"] = "waiting"
@@ -207,33 +214,31 @@ class LobbyService(ReconcileMixin):
     def join_room(self, code: str, nickname: str, request_id: str, player_id: str | None = None) -> dict:
         code = code.strip().upper()
         with self.pool.connection() as conn, conn.transaction():
-            row = conn.execute(
-                "SELECT r.*, v.reservation_id, v.player_id, v.nickname, v.team, v.confirmed FROM reservations v "
-                "JOIN rooms r ON r.room_code = v.room_code WHERE v.request_id = %s", (request_id,)).fetchone()
-            if row is not None:
-                if row["room_code"] != code or row["team"] != 1 or row["nickname"] != nickname:
-                    raise Conflict("request_conflict", "request_id was used for a different request")
-            else:
+            row = self._join_by_request(conn, request_id)
+            if row is None:
                 room = conn.execute("SELECT * FROM rooms WHERE room_code = %s FOR UPDATE", (code,)).fetchone()
                 if room is None:
                     raise NotFound("room_not_found", "no room with that code")
-                if room["status"] != "waiting":
-                    raise Conflict("room_closed", f"the room is not accepting players ({room['status']})")
-                if conn.execute("SELECT 1 FROM reservations WHERE room_code = %s AND team = 1", (code,)).fetchone():
-                    raise Conflict("room_full", "the room is full")
-                # Two tabs of one browser share the stored guest id. A match needs two
-                # distinct players (results rejects a self-match), so a joiner presenting
-                # the creator's own id plays as a fresh guest instead.
-                creator = conn.execute("SELECT player_id FROM reservations WHERE room_code = %s AND team = 0",
-                                       (code,)).fetchone()
-                if player_id and creator is not None and str(creator["player_id"]) == player_id:
-                    player_id = None
-                pid = self._player(conn, player_id, nickname)
-                conn.execute("INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id) "
-                             "VALUES (%s, %s, 1, %s, %s, %s)", (uuid.uuid4(), code, pid, nickname, request_id))
-                row = conn.execute(
-                    "SELECT r.*, v.reservation_id, v.player_id, v.nickname, v.team, v.confirmed FROM reservations v "
-                    "JOIN rooms r ON r.room_code = v.room_code WHERE v.request_id = %s", (request_id,)).fetchone()
+                # A concurrent duplicate of this request may have won the lock first.
+                row = self._join_by_request(conn, request_id)
+                if row is None:
+                    if room["status"] != "waiting":
+                        raise Conflict("room_closed", f"the room is not accepting players ({room['status']})")
+                    if conn.execute("SELECT 1 FROM reservations WHERE room_code = %s AND team = 1", (code,)).fetchone():
+                        raise Conflict("room_full", "the room is full")
+                    # Two tabs of one browser share the stored guest id. A match needs two
+                    # distinct players (results rejects a self-match), so a joiner presenting
+                    # the creator's own id plays as a fresh guest instead.
+                    creator = conn.execute("SELECT player_id FROM reservations WHERE room_code = %s AND team = 0",
+                                           (code,)).fetchone()
+                    if player_id and creator is not None and str(creator["player_id"]) == player_id:
+                        player_id = None
+                    pid = self._player(conn, player_id, nickname)
+                    conn.execute("INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id) "
+                                 "VALUES (%s, %s, 1, %s, %s, %s)", (uuid.uuid4(), code, pid, nickname, request_id))
+                    row = self._join_by_request(conn, request_id)
+            if row["room_code"] != code or row["team"] != 1 or row["nickname"] != nickname:
+                raise Conflict("request_conflict", "request_id was used for a different request")
         if not row["confirmed"]:
             match_id = str(row["match_id"])
             try:
@@ -247,13 +252,34 @@ class LobbyService(ReconcileMixin):
                 log_event("join_refused_by_runtime", match_id=match_id, room_code=code, error=str(e))
                 self.room_status(code)   # refresh the stored status
                 raise Conflict("room_closed", "the room is no longer available") from None
-            with self.pool.connection() as conn:
-                conn.execute("UPDATE reservations SET confirmed = TRUE WHERE reservation_id = %s", (row["reservation_id"],))
+            with self.pool.connection() as conn, conn.transaction():
+                confirmed = conn.execute("UPDATE reservations SET confirmed = TRUE WHERE reservation_id = %s "
+                                         "RETURNING reservation_id", (row["reservation_id"],)).fetchone()
+                if confirmed is None:
+                    # Reconciliation released the stale pending row while this retry was
+                    # reserving it at the runtime: restore it if team 1 is still free.
+                    restored = conn.execute(
+                        "INSERT INTO reservations (reservation_id, room_code, team, player_id, nickname, request_id, confirmed) "
+                        "VALUES (%s, %s, 1, %s, %s, %s, TRUE) ON CONFLICT DO NOTHING RETURNING reservation_id",
+                        (row["reservation_id"], code, row["player_id"], nickname, request_id)).fetchone()
+                    if restored is None:
+                        raise Conflict("room_full", "the room is full")
             log_event("room_joined", match_id=match_id, room_code=code)
         return self._grant(row)
 
+    @staticmethod
+    def _join_by_request(conn, request_id: str) -> dict | None:
+        return conn.execute(
+            "SELECT r.*, v.reservation_id, v.player_id, v.nickname, v.team, v.confirmed FROM reservations v "
+            "JOIN rooms r ON r.room_code = v.room_code WHERE v.request_id = %s", (request_id,)).fetchone()
+
     def _player(self, conn, player_id: str | None, nickname: str) -> uuid.UUID:
-        """A returning guest's id (must exist) or a new one; records the nickname."""
+        """A returning guest's id (must exist) or a new one; records the nickname.
+        The AI opponents' fixed ids are never handed to a guest: such a request
+        gets a fresh guest id (otherwise a vs-AI match would pit the bot against
+        itself and its result would be rejected)."""
+        if player_id and player_id in _BOT_PLAYER_IDS:
+            player_id = None
         if player_id:
             found = conn.execute("UPDATE players SET nickname = %s, last_seen_at = now() WHERE player_id = %s "
                                  "RETURNING player_id", (nickname, player_id)).fetchone()

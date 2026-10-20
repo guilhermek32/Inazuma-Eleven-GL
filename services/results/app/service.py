@@ -16,6 +16,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import uuid
+from datetime import datetime
 
 from .models import MatchResult
 
@@ -79,7 +81,11 @@ class ResultsService:
         where, params = "", []
         if cursor:
             finished_at, match_id = decode_cursor(cursor, 2)
-            where, params = "WHERE (finished_at, match_id) < (%s::timestamptz, %s::uuid)", [finished_at, match_id]
+            try:   # validate here, so a malformed cursor is a 400, never a failed SQL cast
+                key = [datetime.fromisoformat(finished_at), str(uuid.UUID(match_id))]
+            except (TypeError, ValueError):
+                raise BadCursor("invalid cursor") from None
+            where, params = "WHERE (finished_at, match_id) < (%s::timestamptz, %s::uuid)", key
         with self.pool.connection() as conn:
             rows = conn.execute(
                 "SELECT match_id, reason, score_left, score_right, winner, started_at, finished_at, "
@@ -105,9 +111,11 @@ class ResultsService:
         where, params = "", []
         if cursor:
             points, gd, gf, player_id = decode_cursor(cursor, 4)
+            if not all(type(v) is int and abs(v) < 2**31 for v in (points, gd, gf)):
+                raise BadCursor("invalid cursor")
             try:
-                key = (-int(points), -int(gd), -int(gf), str(player_id))
-            except (TypeError, ValueError):
+                key = (-points, -gd, -gf, str(uuid.UUID(player_id)))
+            except (TypeError, ValueError, AttributeError):
                 raise BadCursor("invalid cursor") from None
             where, params = "WHERE (-points, -goal_diff, -goals_for, player_id) > (%s, %s, %s, %s::uuid)", list(key)
         sql = f"""

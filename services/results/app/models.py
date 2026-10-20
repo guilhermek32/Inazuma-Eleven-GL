@@ -21,10 +21,9 @@ winner; finished_at is not before started_at.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 REASONS = ("full_time", "forfeit", "cancelled", "aborted")
 
@@ -47,8 +46,10 @@ class MatchResult(BaseModel):
     winner: int | None = Field(default=None, ge=0, le=1)
     reason: Literal["full_time", "forfeit", "cancelled", "aborted"]
     stats: list[dict] = Field(default_factory=list, max_length=2)
-    started_at: datetime | None = None
-    finished_at: datetime
+    # Timezone-aware only: comparing a naive and an aware datetime would raise
+    # TypeError inside the validator (a 500 instead of a 422).
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime
     runtime_boot_id: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")

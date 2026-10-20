@@ -153,3 +153,38 @@ def test_concurrent_joins_exactly_one_wins_over_http(client):
         codes = list(pool.map(lambda i: client.post(f"/v1/rooms/{code}/join",
                                                     json={"nickname": f"P{i}", "request_id": rid()}).status_code, range(6)))
     assert sorted(codes) == [200, 409, 409, 409, 409, 409]
+
+
+def test_concurrent_duplicate_join_requests_share_one_seat(client):
+    # A double click / client retry while the first transaction holds the room lock.
+    code = create(client).json()["room_code"]
+    request_id = rid()
+    barrier = threading.Barrier(4)
+
+    def attempt(_):
+        barrier.wait()
+        return client.post(f"/v1/rooms/{code}/join", json={"nickname": "Bia", "request_id": request_id})
+
+    with ThreadPoolExecutor(4) as pool:
+        replies = list(pool.map(attempt, range(4)))
+    assert [r.status_code for r in replies] == [200] * 4, [r.text for r in replies]
+    assert len({r.json()["reservation_id"] for r in replies}) == 1
+
+
+def test_bot_player_ids_are_never_given_to_a_guest(client, fake_runtime):
+    from app.bot_client import bot_player
+    bot_id = str(bot_player("hard")[0])
+    room = client.post("/v1/rooms", json={"nickname": "Ana", "request_id": rid(), "player_id": bot_id}).json()
+    assert room["player_id"] != bot_id
+    joined = client.post(f"/v1/rooms/{room['room_code']}/join",
+                         json={"nickname": "Bia", "request_id": rid(), "player_id": bot_id}).json()
+    assert joined["player_id"] != bot_id
+
+
+def test_a_late_create_retry_for_a_closed_room_gets_no_credential(client):
+    request_id = rid()
+    room = create(client, request_id=request_id).json()
+    with client.service.pool.connection() as conn:
+        conn.execute("UPDATE rooms SET status = 'cancelled' WHERE room_code = %s", (room["room_code"],))
+    r = create(client, request_id=request_id)
+    assert r.status_code == 409 and r.json()["error"] == "room_closed", r.text

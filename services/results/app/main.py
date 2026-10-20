@@ -87,6 +87,9 @@ def create_app(database_url: str | None = None, ingest_token: str | None = None)
         if len(body) > MAX_BODY_BYTES:
             return JSONResponse({"error": "too_large"}, status_code=413)
         try:
+            # PostgreSQL jsonb cannot store U+0000: refuse it as invalid, not as a 500.
+            if b"\\u0000" in body:
+                raise ValueError("strings must not contain U+0000")
             document = json.loads(body)
             result = MatchResult.model_validate(document)
         except ValueError as e:   # JSON errors and ValidationError alike
