@@ -4,6 +4,7 @@
 #   docker build -f tools/godot/Dockerfile --target godot -t inazuma/godot:4.7.2 .
 #   docker build -f tools/godot/Dockerfile --target godot-export -t inazuma/godot-export:4.7.2 .
 #   docker build -f tools/godot/Dockerfile --target match-runtime .   (or: docker compose build)
+#   docker build -f tools/godot/Dockerfile --target ai-bot .
 #   docker build -f tools/godot/Dockerfile --target gateway .
 #
 # Both binaries are the official godotengine/godot release, verified against the
@@ -58,7 +59,7 @@ RUN mkdir -p build/server \
  && godot --headless --path /project --export-release "Linux Server" build/server/inazuma_server.x86_64 \
  && test -x build/server/inazuma_server.x86_64
 
-# Headless match runtime (also hosts the AI bot entry point, selected by --bot).
+# Headless match runtime (the same export also hosts the AI bot: see ai-bot).
 # 8910: player WebSocket; 8911: internal control API (GET /health is the
 # healthcheck); /data: terminal registry + result spool (a volume).
 FROM debian:bookworm-slim AS match-runtime
@@ -75,6 +76,24 @@ EXPOSE 8910 8911
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
   CMD curl -fsS -o /dev/null http://127.0.0.1:8911/health || exit 1
 ENTRYPOINT ["/app/inazuma_server.x86_64", "--headless"]
+
+# AI bot service: the same Linux Server export started with --bot (bootstrap
+# checks it before the dedicated_server feature). It hosts the bounded bot
+# sessions that play vs-AI matches over the player WebSocket protocol.
+# 8920: internal job API (GET /health is the healthcheck). Stateless: no volume.
+FROM debian:bookworm-slim AS ai-bot
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --create-home app
+COPY --from=export-server /project/build/server /app
+USER app
+WORKDIR /app
+ENV BOT_CONTROL_PORT=8920
+EXPOSE 8920
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -fsS -o /dev/null http://127.0.0.1:8920/health || exit 1
+ENTRYPOINT ["/app/inazuma_server.x86_64", "--headless", "--", "--bot"]
 
 # Public entry point: TLS, the web client and the reverse proxy to the services.
 FROM caddy:2.10-alpine AS gateway

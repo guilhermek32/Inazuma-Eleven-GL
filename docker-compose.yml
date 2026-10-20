@@ -11,6 +11,9 @@
 #   match-runtime  authoritative headless Godot matches (8910 players,
 #                  8911 internal control API) + durable result spool
 #   results        match history and leaderboard
+#   ai-bot         optional AI opponent for vs-AI rooms: headless Godot bot
+#                  sessions that join the runtime like a browser (8920
+#                  internal job API). Stopping it only disables vs-AI.
 #   postgres       infrastructure: separate lobby and results databases/roles
 #
 # Godot's web build only starts in a secure context: http://localhost works for
@@ -28,6 +31,7 @@ x-secrets:
   match-secret: &match-secret ${MATCH_SECRET:?set MATCH_SECRET in .env (see .env.example)}
   control-token: &control-token ${RUNTIME_CONTROL_TOKEN:?set RUNTIME_CONTROL_TOKEN in .env (see .env.example)}
   ingest-token: &ingest-token ${RESULTS_INGEST_TOKEN:?set RESULTS_INGEST_TOKEN in .env (see .env.example)}
+  bot-token: &bot-token ${BOT_CONTROL_TOKEN:?set BOT_CONTROL_TOKEN in .env (see .env.example)}
 
 # Every container logs JSON lines to Docker's json-file driver, rotated so a
 # long-running VPS can't fill its disk: at most 5 files of 10 MB per container.
@@ -103,6 +107,9 @@ services:
       MATCH_SECRET: *match-secret
       RUNTIME_CONTROL_URL: http://match-runtime:8911
       RUNTIME_CONTROL_TOKEN: *control-token
+      BOT_SERVICE_URL: http://ai-bot:8920
+      BOT_CONTROL_TOKEN: *bot-token
+      BOT_RUNTIME_WS_URL: ws://match-runtime:8910
     networks: [internal]
     depends_on:
       postgres:
@@ -114,6 +121,30 @@ services:
       interval: 10s
       timeout: 3s
       start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    logging: *logging
+
+  # Not a dependency of the lobby: with ai-bot down, vs-AI creation answers
+  # 503 bot_unavailable and PvP is unaffected.
+  ai-bot:
+    build:
+      context: .
+      dockerfile: tools/godot/Dockerfile
+      target: ai-bot
+    environment:
+      BOT_CONTROL_PORT: "8920"
+      BOT_CONTROL_TOKEN: *bot-token
+      BOT_MAX_SESSIONS: ${BOT_MAX_SESSIONS:-8}
+    networks: [internal]
+    depends_on:
+      match-runtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8920/health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
       retries: 3
     restart: unless-stopped
     logging: *logging
