@@ -409,8 +409,9 @@ bot). `match_id` is 1-64 characters of `[A-Za-z0-9_-]`; any other path closes wi
 
 **Connection rules** (`scripts/server/match_runtime.gd`):
 
-1. TCP accept. Over `RUNTIME_MAX_CONNECTIONS` (default 64) open connections, the new
-   one is closed at once.
+1. TCP accept. Over `RUNTIME_MAX_CONNECTIONS` (default 64) open connections, or over
+   `MAX_PENDING_PEERS` (16) connections that have not sent HELLO yet, the new one is
+   closed at once, so idle sockets cannot take the slots players and reconnects need.
 2. WebSocket handshake within **5 s**.
 3. The first message must be HELLO within **15 s** (long enough for a browser that
    stalls compiling shaders). Before HELLO, the text frame `ping` gets the reply `pong`
@@ -484,10 +485,13 @@ highest INPUT `seq` the runtime has accepted from that player.
 - After 15 ticks (250 ms) without a frame, the input goes neutral: no movement, and a
   charge is cancelled without kicking. Disconnecting or reconnecting clears everything.
 
-**Outbound backpressure.** While a peer's WebSocket send buffer holds more than 64 KB,
-its regular snapshots are skipped (events, baselines and discontinuity snapshots
-are still sent). A peer congested for
-more than 5 s is closed with 4429.
+**Outbound backpressure.** Each peer's WebSocket may queue up to 512 KB / 2048
+messages. While more than 64 KB is unsent, its regular snapshots are skipped (events,
+baselines and discontinuity snapshots are still sent); a peer congested for more than
+5 s is closed with 4429. If a send fails outright (the queue is full), a snapshot is
+skipped and counts as congestion, but an event, WELCOME or baseline that cannot be
+queued closes the peer with 4429 at once, rather than silently desyncing it. A dropped
+peer is polled for up to 1 s more so its ERROR and close frame are delivered.
 
 **Close codes**
 
@@ -654,7 +658,7 @@ rooms do not involve the bot service at all.
 | A create or join is retried (timeout, double click) | Both are idempotent by `request_id`: the same request returns the same seat, and different parameters get 409 `request_conflict`. A join interrupted by an unreachable runtime keeps its pending seat; retrying with the same `request_id` completes it. | `test_create_is_idempotent_by_request_id`, `test_pending_join_is_confirmed_by_a_retry`; `LobbyClient` reuses the request id |
 | Invalid, expired, wrong-audience or other-match credential | Refused on HELLO with 4401; an unknown match closes with 4404, a finished one with 4410. Terminal ids are kept (on disk) until their credentials expire, so a valid old token can never recreate or rejoin a match. | `tests/run_runtime_tests.gd` (vectors, signed HELLO, terminal registry); `test_invalid_vectors_fail_with_the_listed_error` |
 | Duplicate, stale or batched inputs; a frozen browser | `RemoteInputQueue`: each action applies once, in id order; stale actions (1 s) are dropped; 250 ms of silence neutralizes movement and cancels a charge. | `tests/run_net_tests.gd` (input queue and loopback sections) |
-| A player disconnects mid-match | The room pauses (state `paused`, event `paused {team, grace_s: 30}`, HUD banner "OPPONENT DISCONNECTED - WAITING 30s"). The clock and sim freeze. A new HELLO with the same credential within **30 s** of real time reattaches the player: new input epoch, WELCOME + full baseline, event `resumed`. Otherwise the player still connected wins by **forfeit**, which is recorded and counted. | `run_net_tests.gd`: pause, frozen clock, resume with baseline, forfeit names the winner |
+| A player disconnects mid-match | The room pauses (state `paused`, event `paused {team, grace_s}`, HUD banner "OPPONENT DISCONNECTED - WAITING 30s"). The clock and sim freeze. Each absent team has its own deadline: **30 s** of real time per absence, at most **60 s** of absence per team over the match (so repeated drop-and-reconnect cannot stall it). A new HELLO with the same credential before that reattaches the player: new input epoch, WELCOME + full baseline, event `resumed` once both are back. The first team past its deadline forfeits; the other wins if it is connected. A charge cut off by the drop is cancelled, not kept for the next shot. | `run_net_tests.gd`: pause, frozen clock, resume with baseline, forfeit names the winner |
 | The results service is down at full time | Gameplay never waits on results. The result is written atomically to `/data/spool/<match_id>.json` **before** the room is freed, then POSTed in the background with exponential backoff (1 s doubling to 60 s, plus up to 25 % jitter). After 2xx the file is deleted; 409/400/422 move it to `spool/rejected/`; anything else retries. Duplicate deliveries are acknowledged as 200, so history gets exactly one record. | `tests/e2e/run_failure_checks.sh` phase 1; `run_runtime_tests.gd` (retries against a fake results service); `test_identical_duplicate_is_acknowledged_and_conflicting_one_rejected` |
 | The runtime restarts (crash, upgrade) | Live matches are lost and both players are dropped. The new process has a new `boot_id` and does not know the match, so the lobby marks it **`aborted`** (404, or a different `boot_id`), and the old credentials get 4404. Matches are never silently recreated. The terminal registry and pending spool files survive on the `runtime-data` volume, and pending results are delivered after the restart. A match that crashed before its result was spooled is not recovered. | `run_failure_checks.sh` phase 2; `test_runtime_restart_aborts_a_running_match`, `test_new_boot_id_for_a_live_match_aborts_it`; `run_runtime_tests.gd` (spool recovery after restart) |
 | The lobby restarts | Rooms and reservations are in PostgreSQL. The reconciler runs at startup and every 30 s: it reads each live room's runtime status, confirms or releases pending joins, and cleans up rooms stuck in `provisioning`. | `services/lobby/tests/test_status.py` |
@@ -804,7 +808,9 @@ No gameplay was changed.
   | live matches | `RUNTIME_MAX_ROOMS`, 32 |
   | bot sessions | `BOT_MAX_SESSIONS`, 8 |
   | queued input actions | 32 per player |
-  | outbound buffer | 64 KB, disconnect after 5 s congested |
+  | outbound buffer | 64 KB soft limit (512 KB / 2048 messages hard), disconnect after 5 s congested |
+  | connections before HELLO | 16 |
+  | reconnect grace | 30 s per absence, 60 s per team per match |
 
 - **Processes.** The runtime, bot, lobby and results containers run as an unprivileged
   `app` user. TLS terminates at Caddy when `SITE_ADDRESS` is a domain (automatic Let's
