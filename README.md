@@ -81,6 +81,8 @@ scripts/
     match_config.gd           #   immutable gameplay rules of one match (wire-serializable)
     match_session.gd          #   clock, halves, goal freeze, slow-mo, events around the sim
   server/                     # headless match runtime: listener, rooms, remote input queue
+  ai/tactics.gd               # read-only tactical queries shared by the in-sim AI and the bot
+  bot/                        # ai-bot service: job API, bot sessions, BotBrain input policy
   net/                        # wire protocol, network client, snapshot interpolation,
                               #   lobby_client.gd (lobby + stats HTTP), latency_probe.gd
   config/game_config.gd       # constants, enums, to_3d() coordinate helper
@@ -106,7 +108,8 @@ scripts/
 ```
 
 `scenes/bootstrap.tscn` is the main scene; `scenes/main_3d.tscn` is the game,
-`scenes/server.tscn` the headless match runtime.
+`scenes/server.tscn` the headless match runtime and `scenes/bot.tscn` the AI bot
+service (`-- --bot`, same dedicated-server export as the runtime).
 
 ### Tests
 
@@ -114,6 +117,7 @@ scripts/
 godot-4 --headless --path . --script res://tests/run_sim_tests.gd           # rules, config, session
 godot-4 --headless --path . --script res://tests/run_net_tests.gd           # protocol, runtime WebSocket listener
 godot-4 --headless --path . --script res://tests/run_runtime_tests.gd       # credentials, control API, spool, registry
+godot-4 --headless --path . --script res://tests/run_bot_tests.gd           # AI bot: policy, job API, bot plays a match over loopback
 godot-4 --headless --path . --script res://tests/run_online_smoke.gd        # two 3D games online against a runtime
 godot-4 --headless --fixed-fps 60 --path . --script res://tests/run_scene_smoke.gd   # full offline match in the 3D scene
 ```
@@ -152,6 +156,7 @@ deployed with Docker Compose:
 | **lobby** (`services/lobby`, FastAPI) | room codes, guest player ids, reservations, provisioning records (its own PostgreSQL database) | public `/api/lobby/v1/...`; calls the runtime's control API |
 | **match runtime** (headless Godot, `scripts/server`) | live authoritative matches, terminal-match registry, durable result spool (`/data` volume) | player WebSocket `/ws/game/<match_id>`; internal control API `:8911` |
 | **results** (`services/results`, FastAPI) | match history and leaderboard (its own PostgreSQL database) | public `/api/stats/v1/...`; internal ingestion `POST /internal/v1/matches` |
+| **ai-bot** (headless Godot, `scripts/bot`; optional) | live bot sessions, one per vs-AI match (no durable state) | internal job API `:8920`; plays through the runtime's player WebSocket like a browser |
 
 The **gateway** (Caddy: TLS, web build, routing) and **PostgreSQL** (one instance,
 separate `lobby` and `results` databases and roles) are infrastructure. Only the
@@ -178,6 +183,19 @@ Match flow:
    `GET /api/stats/v1/matches/recent` and `/api/stats/v1/leaderboard` show history and
    rankings (3/1/0 points, then goal difference, then goals for).
 
+**Against the AI** (`POST /api/lobby/v1/rooms {..., mode: "vs_ai", difficulty:
+"easy"|"normal"|"hard"}`): the lobby provisions the match with team 1's AI at that
+difficulty, reserves both slots, signs the bot's credential, submits a job to the ai-bot
+service (`POST /internal/v1/bots`, idempotent by match_id) with the *internal* runtime URL
+`ws://match-runtime:8910/ws/game/<id>`, and answers only once the bot has joined its
+slot; the human's connection then kicks off at once. If the bot service is down, refuses,
+fails or misses its 10 s join deadline, the lobby stops the job, cancels the runtime
+match and deletes the room: `503 bot_unavailable`, nothing left behind, PvP unaffected.
+The bot is recorded in results under a stable guest id per difficulty as `AI (Easy)`,
+`AI (Normal)` or `AI (Hard)` and is ranked on the leaderboard like any player. How the
+bot works as an autonomous agent (goal, observations, decide/act loop, difficulty
+parameters, decision log) is in [`docs/ai_bot.md`](docs/ai_bot.md).
+
 Credentials, contracts and failure behaviour are documented at the top of
 `services/lobby/app/credentials.py`, `scripts/server/runtime_control_api.gd`,
 `scripts/server/result_spool.gd`, `services/lobby/app/reconcile.py` and
@@ -185,8 +203,9 @@ Credentials, contracts and failure behaviour are documented at the top of
 
 Environment (`.env`, see `.env.example`): `MATCH_SECRET` (credential HMAC key, lobby +
 runtime), `RUNTIME_CONTROL_TOKEN` (lobby -> runtime), `RESULTS_INGEST_TOKEN`
-(runtime -> results), `POSTGRES_PASSWORD`, `LOBBY_DB_PASSWORD`, `RESULTS_DB_PASSWORD`,
-optional `SITE_ADDRESS` / `GATEWAY_HTTP_PORT` / `GATEWAY_HTTPS_PORT`. The runtime also
+(runtime -> results), `BOT_CONTROL_TOKEN` (lobby -> ai-bot), `POSTGRES_PASSWORD`,
+`LOBBY_DB_PASSWORD`, `RESULTS_DB_PASSWORD`, optional `SITE_ADDRESS` / `GATEWAY_HTTP_PORT` /
+`GATEWAY_HTTPS_PORT` / `BOT_MAX_SESSIONS` (concurrent bot sessions, default 8). The runtime also
 reads `MATCH_RUNTIME_PORT`, `RUNTIME_CONTROL_PORT`, `RESULTS_URL` and
 `RUNTIME_DATA_DIR`, which the compose file sets.
 
@@ -199,6 +218,7 @@ bash tests/e2e/run.sh online_menu.mjs   # two browsers: Play Online menu -> matc
 bash tests/e2e/run.sh lobby_match.mjs   # lobby API grants -> play_url -> results
 bash tests/e2e/run.sh netprobe.mjs      # web build boots on Compatibility, WebSocket path
 bash tests/e2e/run_failure_checks.sh    # results down at full time; runtime restart mid-match
+bash tests/e2e/run_bot_checks.sh        # a browser plays the AI from the menu; ai-bot down and back
 ```
 
 - `http://localhost:8080/?netprobe` checks the browser -> gateway -> runtime WebSocket
@@ -223,6 +243,9 @@ bash tests/e2e/run_failure_checks.sh    # results down at full time; runtime res
   as soon as the opponent joins. `Esc`/Cancel leaves the waiting room.
 - **Join Room**: enter a nickname and the code, then Join. Unknown codes, full or closed
   rooms and an unavailable match server are reported on the same screen.
+- **Play vs AI (online)**: pick the AI level (Easy, Normal, Hard) and the half length; the
+  match starts straight away against the ai-bot service's bot (no room code to share).
+  If the AI is unavailable the screen says so and PvP rooms still work.
 - **Recent Matches & Leaderboard** reads `/api/stats/v1`.
 - In a match, `Esc` leaves. Keyboard+mouse or any connected pad drives your team: whichever
   device you used last. Full time offers **New Online Match** and **Back to Menu**.
@@ -235,7 +258,7 @@ godot-4 --path . -- --lobby=http://localhost:8080/api/lobby/v1
 ```
 
 The nickname, the guest `player_id` the lobby issued (so a returning guest keeps one
-leaderboard row) and the last half length are saved with the other settings. The old
+leaderboard row), the last half length and AI level are saved with the other settings. The old
 `/?match=<id>&token=<credential>` links (`play_url`) still work.
 
 On the web the renderer is Compatibility (WebGL 2), so the stadium uses its **web quality
@@ -252,10 +275,11 @@ Latency, bandwidth and browser frame-time numbers, and how they were measured, a
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every push and pull request, with no repository
-secrets: the pinned Godot toolchain image (cached), `--import` and all five Godot suites;
+secrets: the pinned Godot toolchain image (cached), `--import` and all six Godot suites;
 the credential-vector check and both pytest suites; then, with a generated throwaway
 `.env`, `docker compose build` (which runs the Web and Linux Server exports), the stack,
-and the `netprobe`, `online_menu` and `lobby_match` browser e2e scripts.
+the `netprobe`, `online_menu` and `lobby_match` browser e2e scripts and
+`run_bot_checks.sh` (vs-AI from the menu, then ai-bot stopped and started).
 
 ---
 
@@ -269,7 +293,7 @@ every room on one thread).
    e.g. `game.example.com`, at the server.
 2. **Firewall.** Allow inbound TCP 22 (SSH), 80 and 443 only. With `ufw`:
    `ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw enable`.
-   Nothing else is published: lobby, results, runtime and PostgreSQL sit on an internal
+   Nothing else is published: lobby, results, runtime, ai-bot and PostgreSQL sit on an internal
    Docker network with no route out. (Docker-published ports bypass `ufw`'s INPUT rules,
    so don't publish anything else.)
 3. **Configuration.** Clone the repo and `cp .env.example .env`, then set:
@@ -284,7 +308,8 @@ every room on one thread).
    (`127.0.0.1:8081/healthz`) that works in both HTTP and HTTPS modes. Open
    `https://game.example.com/?netprobe` to check the WebSocket path.
 5. **Logs.** Every container writes JSON lines to Docker's `json-file` driver, rotated
-   at 5 x 10 MB per container: `docker compose logs -f lobby match-runtime`.
+   at 5 x 10 MB per container: `docker compose logs -f lobby match-runtime`
+   (`docker compose logs ai-bot | grep bot_decision` shows the bot reasoning).
 
 **State and backups.** Three named volumes hold everything worth keeping:
 
@@ -334,6 +359,8 @@ Its sources are under `src/` and `include/`; it is documented separately in
 
 - **[`AS_BUILT.md`](AS_BUILT.md)** — as-built technical report and grading-criteria map (Godot 3D build).
 - `CLAUDE.md` — concise module map / contributor guide.
+- [`docs/ai_bot.md`](docs/ai_bot.md) — the online AI opponent as an autonomous agent (Milestone 5).
+- [`docs/measurements.md`](docs/measurements.md) — latency, bandwidth, frame time and bot strength numbers.
 - `GODOT_3D_PLAN.md` — the original design plan (intent and rubric rationale).
 - `PROJECT_DOCUMENTATION.md` — the legacy C++ build only.
 

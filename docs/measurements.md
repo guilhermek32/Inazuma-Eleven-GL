@@ -1,4 +1,4 @@
-# Measurements (Milestone 4)
+# Measurements (Milestones 4-5)
 
 Numbers measured on the composed stack (`docker compose up --build`) on one development
 machine: Windows 11, Docker Desktop (WSL 2), 16 logical CPUs, 16 GB. Everything goes
@@ -121,3 +121,35 @@ limitation: a client on a link slower than ~100 kbit/s gets an ever-growing dela
 of being dropped or served fewer snapshots. A fix would need an end-to-end signal, e.g.
 the client reporting its snapshot lag in INPUT/PING so the room can thin that peer's
 snapshots.
+
+## AI bot strength by difficulty
+
+Milestone 5. `tests/measure_bot_strength.gd` plays seeded local matches (6 per line, 90 s
+halves) in which `BotBrain` drives a team through the same `InputSnapshot` a remote
+player sends, observing the session's own state (no network delay), with that team's
+off-ball AI at the bot's difficulty as in a vs-AI room. The left name is team 0.
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(pwd -W):/project" inazuma/godot:4.7.2   --headless --path /project --script res://tests/measure_bot_strength.gd
+```
+
+| Match-up | Goals | Shots | Wins | Right-side possession |
+| --- | --- | --- | --- | --- |
+| Easy bot vs Normal bot | 7-39 | 30-72 | 0-6 | 46% |
+| Normal bot vs Hard bot | 8-27 | 44-78 | 0-5 | 48% |
+| Easy bot vs Hard bot | 3-48 | 19-98 | 0-6 | 44% |
+| in-sim AI (Normal) vs Easy bot | 0-14 | 0-79 | 0-6 | 65% |
+| in-sim AI (Normal) vs Normal bot | 1-23 | 2-71 | 0-6 | 61% |
+| in-sim AI (Normal) vs Hard bot | 0-36 | 0-77 | 0-6 | 55% |
+
+Bot against bot, the harder level wins every decided match, by a wide margin. Every level
+beats the all-AI team, which in this build rarely shoots (the in-sim AI also took 1 shot
+in 6 AI-vs-AI matches before this milestone), so the AI-vs-bot rows mostly show how
+often each level converts its chances: 14, 23 and 36 goals for Easy, Normal and Hard.
+Seeded runs repeat exactly within one engine build.
+
+Over the real stack (`tests/e2e/run_bot_checks.sh`: one mostly idle browser against
+Hard, 30 s halves, about one minute of play), the bot streamed 3876 input frames and
+changed intent or acted 40 times: 4 shots, 5 passes, 9 tackles and 4 switches, about the
+local rate of 4 shots per minute; 22 of those decisions were logged after sampling. That
+match ended 0-0.
