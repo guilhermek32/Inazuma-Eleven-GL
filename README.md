@@ -389,7 +389,12 @@ online AI bot, documentation and demo).
 - `GODOT_3D_PLAN.md` — the original design plan (intent and rubric rationale).
 - `PROJECT_DOCUMENTATION.md` — the legacy C++ build only.
 
-## Attribution
+## Authors
 
-Developed by **Antonio Guilherme** and **Davi Santos** with contributions from **Felipe Lira**. AI-assisted development was used
-for parts of the asset workflow and gameplay/physics implementation.
+**Antonio Guilherme da Silva** and **Erick Keven da Silva Alves**: the current project, the
+online two-player game built from microservices and software components.
+
+The game began as a Computer Graphics course project by **Antonio Guilherme**, **Davi Santos**
+and **Felipe Lira** (the original C++/OpenGL build and the first Godot 3D version).
+AI-assisted development was used for parts of the asset workflow and gameplay/physics
+implementation.

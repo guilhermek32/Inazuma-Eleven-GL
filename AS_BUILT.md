@@ -297,7 +297,9 @@ locks to the carrier.
 
 ---
 
-## 9. Attribution
+## 9. Authors
 
-Developed by **Antonio Guilherme** and **Davi Santos**. AI-assisted development was used for
+**Antonio Guilherme da Silva** and **Erick Keven da Silva Alves** (the current online,
+microservices-based project). The game began as a Computer Graphics course project by
+**Antonio Guilherme**, **Davi Santos** and **Felipe Lira**. AI-assisted development was used for
 parts of the asset workflow and gameplay/physics implementation.
