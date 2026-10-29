@@ -97,6 +97,15 @@ func _build_main_menu() -> void:
 	_make_button(vb, "How to Play", func() -> void: controller._set_game_state(GameConfig.GameState.HOWTO))
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Quit", func() -> void: controller.get_tree().quit())
+	# The online microservices behind Play Online, live (probed only while shown).
+	var services := ServiceStatusPanel.new(true)
+	services.name = "services"
+	services.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	services.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	services.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	services.offset_top = -28
+	services.offset_bottom = -28
+	panel.add_child(services)
 
 func _build_howto_panel() -> void:
 	var panel := _make_panel("howto")

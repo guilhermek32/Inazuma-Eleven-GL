@@ -2,6 +2,7 @@
 #
 #   docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
 #   docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+#   docker compose -f services/docker-compose.test.yml run --rm --build recommendation-tests
 #   docker compose -f services/docker-compose.test.yml down -v
 #
 # Each suite creates and drops its own database on the test server; the
@@ -46,3 +47,11 @@ services:
     depends_on:
       test-db:
         condition: service_healthy
+
+  # No database: the results service is faked with httpx.MockTransport.
+  recommendation-tests:
+    build:
+      context: ./recommendation
+      target: test
+    volumes:
+      - ./recommendation:/app

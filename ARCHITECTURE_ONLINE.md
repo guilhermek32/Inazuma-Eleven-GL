@@ -23,7 +23,9 @@ de Software [e AgentesAI]".
   testes, *health check* e dados próprios: **lobby** (salas, convidados, reservas,
   credenciais assinadas), **match runtime** (partidas autoritativas em Godot headless,
   registro de partidas encerradas e *spool* durável de resultados) e **results**
-  (histórico e ranking). O **ai-bot** é um quarto serviço opcional. O gateway (Caddy) e o
+  (histórico e ranking). O **ai-bot** é um quarto serviço opcional e o
+  **recommendation** (sistema de recomendação: rating Elo, nível de IA recomendado e rivais
+  do mesmo nível, calculados a partir do histórico do results) é o quinto. O gateway (Caddy) e o
   PostgreSQL são infraestrutura. Os serviços conversam só por contratos HTTP/WebSocket
   versionados, e só o gateway publica portas.
 - **Componentes de software:** o mesmo `MatchSession` + `MatchConfig` roda a partida
@@ -54,6 +56,7 @@ undisclosed rubric.
 | **Nonviolent** | The objective is scoring goals. Tackles only win the ball, and a tackle from behind is a foul that gives the opponent a free kick. There are no health points, injuries, damage, blood or knockouts, and nothing rewards hitting a player. Special shots are named visual effects on the ball. The player-facing text was reviewed for this (section 9). | `MatchSimulation._resolve_ball_capture` / `_is_foul_tackle` (`scripts/systems/match_simulation.gd`); stats are possession, shots, on target, steals, fouls and offsides (`menu_manager.gd`); section 9 of this document. |
 | **Microservices** (mandatory) | Three business services: **lobby**, **match runtime** and **results**. Each has its own entry point, image, configuration, tests, health endpoint and data. They talk only through versioned HTTP/WebSocket contracts. **ai-bot** is a fourth, optional business service. The gateway and PostgreSQL are infrastructure. Failures stay isolated: results down delays history but not play, and ai-bot down only disables vs-AI. | `docker-compose.yml`; `services/lobby`, `services/results`, `scripts/server`, `scripts/bot`; sections 2-5 and 7; `tests/e2e/run_failure_checks.sh`, `tests/e2e/run_bot_checks.sh`; demo steps 6-7. |
 | **Software components** (mandatory) | A small number of modules with documented interfaces, reused by different adapters: `MatchSession` + `MatchConfig` (offline controller, `MatchRoom` on the runtime, the bot's observation mirror, the bot-strength benchmark); `NetProtocol` (browser, desktop, runtime, bot); `MatchToken` and `credentials.py` (one credential contract in two languages, checked by shared vectors); `Tactics` (in-sim AI and bot); `ControlServer` (runtime control API, bot job API, fake results service in tests). | Section 3; `scripts/match/`, `scripts/net/`, `scripts/ai/tactics.gd`, `scripts/server/control_server.gd`; `tests/run_sim_tests.gd` (seeded reproducibility, per-session slow motion), `tests/run_net_tests.gd`, `tests/vectors/token_vectors.json` used by `tests/run_runtime_tests.gd` and `services/lobby/tests/test_credentials.py`. |
+| **Recommendation system** | The **recommendation** service rates every player (bots included) with football Elo over the counted match history it reads from results' public API, then recommends the online AI level whose expected score is closest to 60% and the three human rivals closest in rating. It owns no database (an in-memory read model, rebuilt on start) and is optional: down, the game only hides the panel. | `services/recommendation/app/engine.py` (algorithm), `model.py` (read model, refresh policy), `main.py` (API); 29 pytest tests; "Recommended for you" on the Play Online screen; section 5.1. |
 | **AI agents** (optional) | The ai-bot is an autonomous heuristic agent. Its goal is to win. It observes the newest snapshot, decides in a loop paced by a per-difficulty reaction time, and acts only through the player input protocol. Its decisions are logged and its strength is measured. It is **not** an LLM or a learned model: if the course defines "AgentesAI" as LLM-based agents, this criterion is not met. | [`docs/ai_bot.md`](docs/ai_bot.md); `scripts/bot/bot_brain.gd`, `bot_session.gd`; `tests/run_bot_tests.gd`; `tests/measure_bot_strength.gd` (results in `docs/measurements.md`); `docker compose logs ai-bot \| grep bot_decision`; demo steps 5 and 8. |
 
 **What the system does not claim.** There are no user accounts. Players are guest UUIDs,
@@ -83,6 +86,7 @@ flowchart LR
     rt["match-runtime: headless Godot<br/>:8910 player WebSocket<br/>:8911 control API"]
     res["results: FastAPI :8000"]
     bot["ai-bot: headless Godot<br/>:8920 job API (optional)"]
+    rec["recommendation: FastAPI :8000<br/>(optional, no database)"]
     pg[("postgres 17 :5432<br/>databases lobby, results")]
   end
   vcaddy[("volume caddy-data")]
@@ -93,6 +97,8 @@ flowchart LR
   gw -->|"/api/lobby/v1/*"| lobby
   gw -->|"/api/stats/v1/*"| res
   gw -->|"/ws/game/*"| rt
+  gw -->|"/api/recommendations/v1/*"| rec
+  rec -->|"GET /v1/matches/recent (public read)"| res
   lobby -->|"control API, bearer RUNTIME_CONTROL_TOKEN"| rt
   lobby -->|"job API, bearer BOT_CONTROL_TOKEN"| bot
   bot -->|"ws://match-runtime:8910/ws/game/id"| rt
@@ -110,6 +116,7 @@ flowchart LR
 | `match-runtime` | target `match-runtime` (Linux Server export) | `inazuma_server.x86_64 --headless` (dedicated-server feature -> `scenes/server.tscn`) | `:8910`, `:8911` | `curl :8911/health` | `runtime-data` at `/data` |
 | `lobby` | `services/lobby/Dockerfile` target `service` | `uvicorn app.main:create_app --factory` | `:8000` | `GET /health` (runs `SELECT 1`) | PostgreSQL database `lobby` |
 | `results` | `services/results/Dockerfile` target `service` | `uvicorn app.main:create_app --factory` | `:8000` | `GET /health` (runs `SELECT 1`) | PostgreSQL database `results` |
+| `recommendation` | `services/recommendation/Dockerfile` target `service` | `uvicorn app.main:create_app --factory` | `:8000` | `GET /health` (always 200 while the process runs) | none (memory) |
 | `ai-bot` | target `ai-bot` (the same Linux Server export) | `inazuma_server.x86_64 --headless -- --bot` (-> `scenes/bot.tscn`) | `:8920` | `curl :8920/health` | none (sessions live in memory) |
 | `postgres` | `postgres:17-alpine` | `services/postgres/init/10-service-databases.sh` on first start | `:5432` | `pg_isready -h 127.0.0.1` | `postgres-data` |
 
@@ -135,6 +142,8 @@ both roles share that export.
 | `/ws/game/*` | `match-runtime:8910` | WebSocket upgrade; the browser's player connection |
 | `/api/lobby/v1/*` | `lobby:8000` | the `/api/lobby` prefix is stripped |
 | `/api/stats/v1/*` | `results:8000` | the `/api/stats` prefix is stripped |
+| `/api/recommendations/v1/*` | `recommendation:8000` | the `/api/recommendations` prefix is stripped |
+| `/api/status/v1/<service>` | that service's `/health` | `gateway`, `lobby`, `match-runtime`, `ai-bot`, `results`, `recommendation`: 200 `{"service","status":"up"}` or 503 `{"status":"down"}`; the internal health body is never forwarded |
 | `/api/*` (anything else) | 404 `{"error":"not_found"}` | the internal APIs are never routed |
 | `/healthz` | 200 `ok` | public liveness |
 | everything else | `/srv/web` | static Web export; `.pck` served as `application/octet-stream` |
@@ -262,6 +271,7 @@ FROM PUBLIC` on each database. Each service creates or updates its own schema on
 | **match runtime** | live matches (memory), the terminal-match registry, the result spool | memory; `/data/terminal_matches.json`; `/data/spool/<match_id>.json`, `/data/spool/rejected/` on volume `runtime-data` | `scripts/server/terminal_registry.gd`, `result_spool.gd` | the lobby reads status through `GET /internal/v1/matches/{id}`; results receive each result by POST |
 | **results** | match history (`matches`: exact submitted document + canonical SHA-256 hash), per-player read model (`match_players`: goals, points, outcome, `counted`) | database `results` | `services/results/app/db.py` | public reads `/api/stats/v1/matches/recent`, `/leaderboard` |
 | **ai-bot** | live bot sessions and finished jobs (kept 10 minutes) | memory only | `scripts/bot/bot_service.gd` | the lobby through the job API |
+| **recommendation** | a derived read model: the newest 5000 counted matches and the Elo ratings computed from them | memory only (re-read from results on start) | `services/recommendation/app/model.py` | public reads `/api/recommendations/v1/...`; it reads results only through results' public API |
 | gateway (infra) | TLS certificates, ACME account | volume `caddy-data` | Caddy | none |
 
 Identifiers: `match_id` is a UUID the lobby allocates independently of the
@@ -317,6 +327,22 @@ cursor gives 400 `{"error": "invalid_cursor"}`.
 
 Only **counted** matches score: full time, or a forfeit with a winner. A win is 3
 points, a draw 1 and a loss 0. Cancelled matches never reach results.
+
+**Recommendation, public reads** (`services/recommendation/app/main.py`, `engine.py`,
+`model.py`). The gateway maps `/api/recommendations/v1/...` to `/v1/...`.
+
+| Route | Answer |
+| --- | --- |
+| `GET /api/recommendations/v1/recommendations?player_id=<uuid>` (optional; absent or unknown = a new player) | `{player: {player_id, nickname, rating, played, wins, draws, losses, form, provisional}, ai_level: {level, win_probability, reason: first_match / build_confidence / matched_to_rating / top_level, options: [{level, bot_rating, win_probability}] x3}, rivals: [{player_id, nickname, rating, played, win_probability}] (up to 3), model: {matches, players, stale, updated_at}}`; 400 `invalid_player_id`; 503 `results_unavailable` before the first successful read |
+| `GET /api/recommendations/v1/ratings?limit=` (1-100) | `{items: [{rank, player_id, nickname, rating, played, bot}], model}` |
+
+The algorithm (football Elo: K 40 for the first 10 matches then 24, goal-difference
+index 1 / 1.5 / (11+N)/8, bots starting at 900 / 1050 / 1200; the AI level whose
+expected score is closest to 0.6, ties to the easier level; rivals = the closest human
+ratings) is specified in the header of `engine.py`. The read model copies counted
+matches from `GET /v1/matches/recent`: incrementally at most every 10 s, in full every
+5 minutes (which also catches a late spool delivery); with results down it serves the
+last model marked `stale`.
 
 Every service also has a `GET /health` that the gateway does not route. Lobby and
 results answer `{"status": "ok"}`, or 503 `{"status": "unhealthy"}` when the database

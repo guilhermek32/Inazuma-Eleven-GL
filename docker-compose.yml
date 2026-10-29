@@ -1,4 +1,4 @@
-# Online deployment: gateway + three business services + PostgreSQL.
+# Online deployment: gateway + business services + PostgreSQL.
 #
 #   cp .env.example .env               # then set real secrets
 #   docker compose up --build          # then open http://localhost:8080
@@ -6,11 +6,16 @@
 # Services
 #   gateway        Caddy: TLS, the web build, and the only published ports.
 #                  /api/lobby/v1/* -> lobby, /api/stats/v1/* -> results,
+#                  /api/recommendations/v1/* -> recommendation,
+#                  /api/status/v1/<service> -> that service's health (up/down only),
 #                  /ws/game/*      -> match-runtime (player WebSocket)
 #   lobby          rooms, guest players, reservations, signed credentials
 #   match-runtime  authoritative headless Godot matches (8910 players,
 #                  8911 internal control API) + durable result spool
 #   results        match history and leaderboard
+#   recommendation skill ratings (Elo) from the results history: recommended
+#                  AI level and rivals. Reads results' public API, owns no
+#                  database; stopping it only hides the recommendations.
 #   ai-bot         optional AI opponent for vs-AI rooms: headless Godot bot
 #                  sessions that join the runtime like a browser (8920
 #                  internal job API). Stopping it only disables vs-AI.
@@ -159,6 +164,27 @@ services:
     networks: [internal]
     depends_on:
       postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    logging: *logging
+
+  # Not a dependency of anything: with it down the game only loses the
+  # "Recommended for you" panel.
+  recommendation:
+    build:
+      context: services/recommendation
+      target: service
+    environment:
+      RESULTS_URL: http://results:8000
+    networks: [internal]
+    depends_on:
+      results:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]

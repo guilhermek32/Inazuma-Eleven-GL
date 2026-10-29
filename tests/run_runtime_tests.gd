@@ -454,6 +454,12 @@ func _fake_lobby_handler(method: String, path: String, _headers: Dictionary, bod
 		"/api/stats/v1/leaderboard":
 			return {"status": 200, "body": {"items": [{"rank": 1, "nickname": "Ana", "points": 3, "wins": 1, "draws": 0,
 					"losses": 0, "goal_diff": 2, "goals_for": 2, "player_id": "p-1"}], "next_cursor": null}}
+		"/api/recommendations/v1/recommendations":
+			return {"status": 200, "body": {"player": {"player_id": "p-1", "rating": 1032, "played": 2, "wins": 2,
+					"draws": 0, "losses": 0, "form": "WW", "provisional": true},
+					"ai_level": {"level": "normal", "win_probability": 0.47, "reason": "matched_to_rating", "options": []},
+					"rivals": [{"player_id": "p-2", "nickname": "Bia", "rating": 1010, "played": 3, "win_probability": 0.53}],
+					"model": {"matches": 5, "players": 5, "stale": false, "updated_at": null}}}
 	return {"status": 404, "body": {"error": "not_found"}}
 
 ## Runs one LobbyClient coroutine to completion while polling the fake lobby.
@@ -514,6 +520,19 @@ func _test_lobby_client() -> void:
 	var board := await _lobby_call(func() -> Dictionary: return await lobby.leaderboard(5))
 	_check(board.get("ok", false) and OnlineMenu.format_board(board).begins_with("1. Ana   3 pts"),
 			"leaderboard() reads the stats API and formats for the menu")
+	var rec := await _lobby_call(func() -> Dictionary: return await lobby.recommendations("p-1"))
+	var rec_text: Dictionary = OnlineMenu.format_recommendation(rec.get("body", {}))
+	_check(rec.get("ok", false) and rec_text.level == "NORMAL   47% expected score"
+			and rec_text.player == "Rating 1032  (provisional)\n2 played (2-0-0)   form WW"
+			and rec_text.rivals == "Bia   1010   (53%)" and rec_text.reason == OnlineMenu.REASON_TEXT.matched_to_rating,
+			"recommendations() reads the recommendation API and formats for the menu")
+	var fresh: Dictionary = OnlineMenu.format_recommendation({"player": {"rating": 1000, "played": 0}, "rivals": [],
+			"ai_level": {"level": "easy", "win_probability": 0.64, "reason": "first_match"}})
+	_check(fresh.rivals.begins_with("No rated rivals") and fresh.level.begins_with("EASY"),
+			"a new player's recommendation has no rivals yet")
+	_check(lobby.recommendations_base_url() == "http://127.0.0.1:%d/api/recommendations/v1" % LOBBY_PORT
+			and lobby.status_base_url() == "http://127.0.0.1:%d/api/status/v1/" % LOBBY_PORT,
+			"the recommendation and status URLs derive from the lobby origin")
 	var both := {}
 	var first_call := func() -> void: both["a"] = await lobby.leaderboard(5)
 	first_call.call()

@@ -2,16 +2,19 @@ class_name LobbyClient
 extends Node
 
 ## HTTP client of the public online services, through the gateway: the
-## lobby's room API and the results service's public reads. Used by the
-## in-game online menu (OnlineMenu); add it to the tree before calling.
+## lobby's room API, the results service's public reads and the
+## recommendation service. Used by the in-game online menu (OnlineMenu); add
+## it to the tree before calling.
 ##
-## Endpoints (base_url = <origin>/api/lobby/v1, stats = <origin>/api/stats/v1):
+## Endpoints (base_url = <origin>/api/lobby/v1, stats = <origin>/api/stats/v1,
+## recommendations = <origin>/api/recommendations/v1):
 ##   create_room   POST /rooms               {nickname, half_length_s, request_id, player_id?,
 ##                                            mode? ("vs_ai" + difficulty: the AI bot is already
 ##                                            seated on team 1 when the reply arrives)}
 ##   join_room     POST /rooms/{code}/join   {nickname, request_id, player_id?}
 ##   room_status   GET  /rooms/{code}
 ##   recent_matches / leaderboard   GET <stats>/matches/recent, <stats>/leaderboard
+##   recommendations   GET <recommendations>/recommendations?player_id=
 ## base_url defaults to the page's own origin on the web (same-origin, so no
 ## CORS) and to `-- --lobby=<url>` or DEFAULT_DESKTOP_BASE on desktop.
 ##
@@ -72,6 +75,13 @@ func ws_url(ws_path: String) -> String:
 func stats_base_url() -> String:
 	return origin_of(base_url) + "/api/stats/v1"
 
+func recommendations_base_url() -> String:
+	return origin_of(base_url) + "/api/recommendations/v1"
+
+## The gateway's per-microservice status probe: GET <url><service id>.
+func status_base_url() -> String:
+	return origin_of(base_url) + "/api/status/v1/"
+
 func is_busy() -> bool:
 	return _busy
 
@@ -100,6 +110,13 @@ func recent_matches(limit := 8) -> Dictionary:
 
 func leaderboard(limit := 8) -> Dictionary:
 	return await _request(HTTPClient.METHOD_GET, "%s/leaderboard?limit=%d" % [stats_base_url(), limit], null)
+
+## `player_id` "" asks for a new player's recommendation.
+func recommendations(player_id := "") -> Dictionary:
+	var url := recommendations_base_url() + "/recommendations"
+	if player_id != "":
+		url += "?player_id=" + player_id.uri_encode()
+	return await _request(HTTPClient.METHOD_GET, url, null)
 
 ## A player-facing explanation of a failed reply.
 static func describe(reply: Dictionary) -> String:

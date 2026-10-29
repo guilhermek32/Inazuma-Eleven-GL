@@ -73,6 +73,8 @@ jobs:
         run: docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
       - name: Results pytest (throwaway PostgreSQL)
         run: docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+      - name: Recommendation pytest (fake results service)
+        run: docker compose -f services/docker-compose.test.yml run --rm --build recommendation-tests
       - name: Clean up
         if: always()
         run: docker compose -f services/docker-compose.test.yml down -v

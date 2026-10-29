@@ -9,6 +9,13 @@ extends Node
 ##            (LobbyClient.describe()).
 ##   waiting  the created room's code, "waiting for opponent", Cancel.
 ##   stats    recent matches and the leaderboard from the results service.
+## Beside every page, `services` (ServiceStatusPanel) shows each microservice
+## live; hovering or focusing an action lights up the services it uses
+## (ACTION_SERVICES), and the waiting/stats pages light up theirs. The home
+## page also shows "Recommended for you" from the recommendation service:
+## the player's Elo rating and form, the AI level to play next (one click
+## selects it) and rivals at their level. Those reads go through `reads`, a
+## second LobbyClient, so they never make a Create/Join answer "busy".
 ## Create/join go through `lobby` (LobbyClient), then hand the grant to
 ## controller.start_online_from_lobby(); the controller enters the match on
 ## WELCOME (joiner) or on the kickoff event (creator, from the waiting page).
@@ -21,7 +28,9 @@ extends Node
 ## Console lines for automation: "[online] room created <code> (match <id>)",
 ## "[online] joined room <code> (match <id>)", "[online] vs AI room created
 ## <code> (match <id>, <level>)", "[online] lobby error <code>:
-## <message>", and MenuManager.log_layout()'s "[ui] online_<page> ..." line.
+## <message>", "[online] recommendation level=<level> rating=<n>
+## rivals=<n>", ServiceStatusPanel's "[services] ..." and
+## MenuManager.log_layout()'s "[ui] online_<page> ..." line.
 
 const HALF_LENGTHS := [30, 120, 300, 600]
 const HALF_LABELS := ["30 s", "2 min", "5 min", "10 min"]
@@ -31,6 +40,23 @@ const NICKNAME_PATTERN := "^[A-Za-z0-9_.\\- ]{1,16}$"   # the lobby's own rule
 const CODE_LENGTH := 6
 const ERROR_COLOR := Color(1.0, 0.45, 0.4)
 const INFO_COLOR := Color(0.8, 0.9, 1.0)
+const DIM_COLOR := Color(0.62, 0.68, 0.78)
+## Microservices behind each action / page (ServiceStatusPanel ids).
+const ACTION_SERVICES := {
+	"create": ["gateway", "lobby", "match-runtime"],
+	"join": ["gateway", "lobby", "match-runtime"],
+	"vs_ai": ["gateway", "lobby", "match-runtime", "ai-bot"],
+	"stats": ["gateway", "results"],
+	"use_level": ["gateway", "recommendation", "results"],
+	"waiting": ["gateway", "lobby", "match-runtime"],
+	"refresh": ["gateway", "results"],
+}
+const REASON_TEXT := {
+	"first_match": "Your first online match: start here and get a feel for the game.",
+	"build_confidence": "Even this level is a challenge right now: a few wins here will raise your rating.",
+	"matched_to_rating": "The level closest to a 60% expected score: challenging but winnable.",
+	"top_level": "You out-rate every bot: Hard is the best test left.",
+}
 
 var controller
 var settings: SettingsStore
@@ -43,6 +69,14 @@ var status_label: Label
 var waiting_code_label: Label
 var recent_label: Label
 var board_label: Label
+var services: ServiceStatusPanel
+var reads: LobbyClient           # background reads (recommendations): never blocks `lobby`
+var rec_player_label: Label
+var rec_level_label: Label
+var rec_reason_label: Label
+var rec_rivals_label: Label
+var use_level_button: Button
+var _rec_level := ""
 var _pages := {}
 var _half_buttons: Array[Button] = []
 var _ai_buttons: Array[Button] = []
@@ -53,6 +87,9 @@ func build(layer: CanvasLayer) -> void:
 	lobby = LobbyClient.new()
 	lobby.name = "LobbyClient"
 	add_child(lobby)
+	reads = LobbyClient.new()
+	reads.name = "ReadsClient"
+	add_child(reads)
 	panel = Control.new()
 	panel.name = "online"
 	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -62,16 +99,26 @@ func build(layer: CanvasLayer) -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.color = Color(0.03, 0.05, 0.10, 1.0)
 	panel.add_child(bg)
+	services = ServiceStatusPanel.new()
+	services.name = "services"
 	_build_home()
 	_build_waiting()
 	_build_stats()
+	services.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	services.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	services.grow_vertical = Control.GROW_DIRECTION_BOTH
+	services.offset_left = -40
+	services.offset_right = -40
+	panel.add_child(services)
 
 ## Shows `page_name` ("home", "waiting", "stats") and logs its layout.
 func show_page(page_name: String) -> void:
 	page = page_name
 	for key in _pages:
 		(_pages[key] as Control).visible = key == page_name
+	services.highlight(ACTION_SERVICES.get(page_name, []))
 	if page_name == "home":
+		_load_recommendations()
 		_show_status("", false)
 		_set_busy(lobby.is_busy())
 		if nickname_edit.text == "":
@@ -140,6 +187,109 @@ func _build_home() -> void:
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status_label.add_theme_font_size_override("font_size", 20)
 	vb.add_child(status_label)
+	_build_recommendations(_pages["home"])
+
+## "Recommended for you": left of the home page (see the class doc).
+func _build_recommendations(holder: Control) -> void:
+	var box := PanelContainer.new()
+	box.name = "recommendations"
+	box.add_theme_stylebox_override("panel", ServiceStatusPanel.panel_style())
+	box.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	box.grow_horizontal = Control.GROW_DIRECTION_END
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	box.offset_left = 40
+	box.offset_right = 40
+	holder.add_child(box)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	box.add_child(vb)
+	_side_label(vb, "RECOMMENDED FOR YOU", 22, Color(1.0, 0.93, 0.55))
+	_side_label(vb, "Recommendation microservice (Elo rating)", 14, DIM_COLOR)
+	rec_player_label = _side_label(vb, "Loading...", 18, INFO_COLOR)
+	_side_label(vb, "AI LEVEL TO PLAY NEXT", 16, DIM_COLOR)
+	rec_level_label = _side_label(vb, "-", 22, Color.WHITE)
+	rec_reason_label = _side_label(vb, "", 15, INFO_COLOR)
+	use_level_button = Button.new()
+	use_level_button.text = "Use this AI level"
+	use_level_button.custom_minimum_size = Vector2(300, 40)
+	use_level_button.add_theme_font_size_override("font_size", 20)
+	use_level_button.disabled = true
+	use_level_button.pressed.connect(_on_use_level)
+	use_level_button.set_meta("ui_id", "use_level")
+	_light_services(use_level_button, "use_level")
+	vb.add_child(use_level_button)
+	_side_label(vb, "RIVALS AT YOUR LEVEL", 16, DIM_COLOR)
+	rec_rivals_label = _side_label(vb, "", 16, INFO_COLOR)
+
+func _side_label(parent: Control, text: String, size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.custom_minimum_size = Vector2(320, 0)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", size)
+	label.add_theme_color_override("font_color", color)
+	parent.add_child(label)
+	return label
+
+func _load_recommendations() -> void:
+	if reads.is_busy():
+		return
+	var reply: Dictionary = await reads.recommendations(settings.online_player_id)
+	if reply.error == "invalid_player_id":   # a corrupted saved id: ask as a new player
+		reply = await reads.recommendations()
+	if not reply.ok:
+		_rec_level = ""
+		use_level_button.disabled = true
+		rec_player_label.text = "Recommendations unavailable right now."
+		rec_level_label.text = "-"
+		rec_reason_label.text = "The recommendation service is down; everything else still works."
+		rec_rivals_label.text = ""
+		return
+	var text := format_recommendation(reply.body)
+	rec_player_label.text = text.player
+	rec_level_label.text = text.level
+	rec_reason_label.text = text.reason
+	rec_rivals_label.text = text.rivals
+	_rec_level = str(reply.body.ai_level.level)
+	use_level_button.disabled = false
+	print("[online] recommendation level=%s rating=%d rivals=%d" % [_rec_level, int(reply.body.player.rating),
+			reply.body.get("rivals", []).size()])
+	if page == "home":   # the panel grew: log the controls' new positions
+		MenuManager.log_layout(_pages["home"], "online_home")
+
+## The recommendation reply as the panel's texts: {player, level, reason, rivals}.
+static func format_recommendation(body: Dictionary) -> Dictionary:
+	var p: Dictionary = body.get("player", {})
+	var played := int(p.get("played", 0))
+	var player := "Rating %d%s\n%d played (%d-%d-%d)" % [int(p.get("rating", 1000)),
+			"  (provisional)" if p.get("provisional", true) else "", played, int(p.get("wins", 0)),
+			int(p.get("draws", 0)), int(p.get("losses", 0))]
+	if str(p.get("form", "")) != "":
+		player += "   form %s" % p.form
+	var ai: Dictionary = body.get("ai_level", {})
+	var level := "%s   %d%% expected score" % [str(ai.get("level", "normal")).to_upper(),
+			roundi(float(ai.get("win_probability", 0.5)) * 100.0)]
+	var reason: String = REASON_TEXT.get(str(ai.get("reason", "")), "")
+	var lines: PackedStringArray = []
+	for r in body.get("rivals", []):
+		lines.append("%s   %d   (%d%%)" % [str(r.nickname), int(r.rating), roundi(float(r.win_probability) * 100.0)])
+	var rivals := "\n".join(lines) if not lines.is_empty() else "No rated rivals yet: play a friend online."
+	return {"player": player, "level": level, "reason": reason, "rivals": rivals}
+
+func _on_use_level() -> void:
+	var i := AI_LEVELS.find(_rec_level)
+	if i >= 0:
+		_ai_buttons[i].button_pressed = true
+		_show_status("AI level set to %s (recommended)." % AI_LABELS[i], false)
+
+## Hovering or focusing `control` lights up the services of ACTION_SERVICES[action].
+func _light_services(control: Control, action: String) -> void:
+	var on := func() -> void: services.highlight(ACTION_SERVICES[action])
+	var off := func() -> void: services.highlight(ACTION_SERVICES.get(page, []))
+	control.mouse_entered.connect(on)
+	control.focus_entered.connect(on)
+	control.mouse_exited.connect(off)
+	control.focus_exited.connect(off)
 
 func _build_waiting() -> void:
 	var vb := _page_box("waiting")
@@ -156,8 +306,10 @@ func _build_waiting() -> void:
 func _build_stats() -> void:
 	var vb := _page_box("stats")
 	_title(vb, "RECENT MATCHES", 36)
+	_subtitle(vb, "from the Results microservice")
 	recent_label = _text_block(vb)
 	_title(vb, "LEADERBOARD", 36)
+	_subtitle(vb, "from the Results microservice (3 / 1 / 0 points)")
 	board_label = _text_block(vb)
 	_button(vb, "Refresh", _load_stats, "refresh")
 	_button(vb, "Back", back, "back")
@@ -270,6 +422,8 @@ func _load_stats() -> void:
 	# while these requests were in flight.
 	if page == "home":
 		_set_busy(false)
+	elif page == "stats":   # the lists grew: log the buttons' new positions
+		MenuManager.log_layout(_pages["stats"], "online_stats")
 
 static func format_recent(reply: Dictionary) -> String:
 	var lines: PackedStringArray = []
@@ -358,6 +512,14 @@ func _title(parent: Control, text: String, size: int) -> Label:
 	parent.add_child(label)
 	return label
 
+func _subtitle(parent: Control, text: String) -> void:
+	var label := Label.new()
+	label.text = text
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_color_override("font_color", DIM_COLOR)
+	parent.add_child(label)
+
 func _text_block(parent: Control) -> Label:
 	var label := Label.new()
 	label.custom_minimum_size = Vector2(620, 0)
@@ -373,6 +535,8 @@ func _button(parent: Control, text: String, handler: Callable, ui_id: String) ->
 	button.add_theme_font_size_override("font_size", 24)
 	button.pressed.connect(handler)
 	button.set_meta("ui_id", ui_id)
+	if ACTION_SERVICES.has(ui_id):
+		_light_services(button, ui_id)
 	parent.add_child(button)
 	return button
 

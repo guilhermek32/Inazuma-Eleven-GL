@@ -8,6 +8,11 @@
 #   /ws/game/<match_id>  WebSocket upgrade, proxied to the match runtime
 #   /api/lobby/v1/*      lobby public API (prefix /api/lobby stripped)
 #   /api/stats/v1/*      results public reads (prefix /api/stats stripped)
+#   /api/recommendations/v1/*  recommendation public reads (prefix stripped)
+#   /api/status/v1/<svc> up/down of one microservice (gateway, lobby,
+#                        match-runtime, ai-bot, results, recommendation): its
+#                        /health is probed and only {"service","status"} is
+#                        returned, never the internal health body
 #   /api/*               404: internal APIs are never routed
 #   /healthz             gateway liveness (public)
 #
@@ -20,6 +25,26 @@
 
 {
 	admin off
+}
+
+# Status probe of one microservice: (name, upstream host:port).
+# 2xx from its /health -> 200 {"status":"up"}; any other answer -> 503
+# {"status":"down"}; unreachable -> the site's handle_errors (also 503 down).
+(service_status) {
+	handle /api/status/v1/{args[0]} {
+		rewrite * /health
+		reverse_proxy {args[1]} {
+			@up status 2xx
+			handle_response @up {
+				header Content-Type application/json
+				respond `{"service":"{args[0]}","status":"up"}` 200
+			}
+			handle_response {
+				header Content-Type application/json
+				respond `{"service":"{args[0]}","status":"down"}` 503
+			}
+		}
+	}
 }
 
 http://:8081 {
@@ -63,6 +88,30 @@ http://:8081 {
 	handle /api/stats/v1/* {
 		uri strip_prefix /api/stats
 		reverse_proxy results:8000
+	}
+
+	handle /api/recommendations/v1/* {
+		uri strip_prefix /api/recommendations
+		reverse_proxy recommendation:8000
+	}
+
+	handle /api/status/v1/gateway {
+		header Content-Type application/json
+		respond `{"service":"gateway","status":"up"}` 200
+	}
+	import service_status lobby lobby:8000
+	import service_status match-runtime match-runtime:8911
+	import service_status ai-bot ai-bot:8920
+	import service_status results results:8000
+	import service_status recommendation recommendation:8000
+
+	# A stopped service's container name no longer resolves: answer "down".
+	handle_errors {
+		@status path /api/status/v1/*
+		handle @status {
+			header Content-Type application/json
+			respond `{"status":"down"}` 503
+		}
 	}
 
 	# Nothing else under /api is public: the runtime control API and the

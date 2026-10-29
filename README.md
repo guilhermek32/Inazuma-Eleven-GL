@@ -135,6 +135,7 @@ PostgreSQL:
 ```bash
 docker compose -f services/docker-compose.test.yml run --rm --build lobby-tests
 docker compose -f services/docker-compose.test.yml run --rm --build results-tests
+docker compose -f services/docker-compose.test.yml run --rm --build recommendation-tests   # no database: results is faked
 docker compose -f services/docker-compose.test.yml down -v
 ```
 
@@ -155,8 +156,8 @@ discards them as well.
 
 ## Online play
 
-Online matches run on three independent business services behind one gateway,
-deployed with Docker Compose:
+Online matches run on independent business services behind one gateway, deployed with
+Docker Compose:
 
 | Service | Owns | Interfaces |
 | --- | --- | --- |
@@ -164,10 +165,13 @@ deployed with Docker Compose:
 | **match runtime** (headless Godot, `scripts/server`) | live authoritative matches, terminal-match registry, durable result spool (`/data` volume) | player WebSocket `/ws/game/<match_id>`; internal control API `:8911` |
 | **results** (`services/results`, FastAPI) | match history and leaderboard (its own PostgreSQL database) | public `/api/stats/v1/...`; internal ingestion `POST /internal/v1/matches` |
 | **ai-bot** (headless Godot, `scripts/bot`; optional) | live bot sessions, one per vs-AI match (no durable state) | internal job API `:8920`; plays through the runtime's player WebSocket like a browser |
+| **recommendation** (`services/recommendation`, FastAPI) | nothing durable: an in-memory read model of the counted match history, copied from results' public API, and the Elo ratings computed from it | public `/api/recommendations/v1/...` (recommended AI level, rivals, Elo ranking) |
 
 The **gateway** (Caddy: TLS, web build, routing) and **PostgreSQL** (one instance,
 separate `lobby` and `results` databases and roles) are infrastructure. Only the
 gateway publishes ports; the runtime control API and results ingestion are never routed.
+`GET /api/status/v1/<service>` answers only up/down for each microservice (the game's
+**Microservices** panel; `curl http://localhost:8080/api/status/v1/lobby`).
 
 ```bash
 cp .env.example .env             # then replace every secret (docs/demo.md step 1 generates them)
@@ -258,6 +262,10 @@ under another name (`COMPOSE_PROJECT_NAME=...`), export the same variable for th
   match starts straight away against the ai-bot service's bot (no room code to share).
   If the AI is unavailable the screen says so and PvP rooms still work.
 - **Recent Matches & Leaderboard** reads `/api/stats/v1`.
+- **Recommended for you** (left panel) comes from the recommendation service: your Elo
+  rating and form, the AI level to play next (**Use this AI level** selects it) and rivals
+  at your level. **Microservices** (right panel, and a strip on the main menu) shows each
+  service live; hovering an action lights up the services it uses.
 - In a match, `Esc` leaves. Keyboard+mouse or any connected pad drives your team: whichever
   device you used last. Full time offers **New Online Match** and **Back to Menu**.
 
