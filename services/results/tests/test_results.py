@@ -160,3 +160,10 @@ def test_naive_timestamps_and_nul_strings_are_rejected_as_invalid(client):
     doc = result(C, D, 1, 0)
     doc["players"][0]["nickname"] = "a\u0000b"
     assert post(client, doc).status_code == 422
+
+
+def test_an_escaped_backslash_before_u0000_is_not_a_nul(client):
+    doc = result(C, D, 2, 0)
+    doc["players"][0]["nickname"] = "a\\u0000b"   # the text a\u0000b: no NUL, so it is stored
+    r = post(client, doc)
+    assert r.status_code == 201, (r.status_code, r.text)
