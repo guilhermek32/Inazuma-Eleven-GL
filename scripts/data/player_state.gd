@@ -19,6 +19,33 @@ var stun_timer := 0.0
 var kick_power := 0.0
 var hold_timer := 0.0
 var is_moving := false
+# Actual movement velocity (field units/s): all movement paths accelerate toward
+# their desired velocity instead of teleport-stepping, giving players weight.
+var vel_x := 0.0
+var vel_y := 0.0
+# Active tackle attempt: while > 0 this player can steal on contact; if it
+# expires without winning the ball the lunge whiffs and self-stuns.
+var tackle_timer := 0.0
+# Sprint stamina in [0, 1]; drains while sprinting, regenerates otherwise.
+var stamina := 1.0
+# Goalkeeper shot reaction: counts down from the reaction delay once an inbound
+# shot is spotted; the keeper only chases the predicted intercept after it hits 0.
+var gk_react_timer := 0.0
+var gk_shot_active := false
+# Dive lunge toward a wide intercept: while > 0 the keeper bursts sideways and
+# the view plays/poses a dive toward gk_dive_dir (±1 in field y).
+var gk_dive_timer := 0.0
+var gk_dive_dir := 0
+# AI decision state: the carrier decides on think ticks and commits to its
+# chosen dribble direction between them; off-ball players make staggered runs.
+var think_timer := 0.0
+var dribble_dir := Vector2.ZERO
+var run_timer := 0.0          # counts down to this player's next off-ball run
+var run_hold := 0.0           # remaining seconds committed to run_target
+var run_target := Vector2.ZERO
+# Personality: small per-player variation so the team never acts in lockstep.
+var decide_jitter := 1.0      # scales think/run intervals (0.8–1.2)
+var aggression := 1.0         # scales shoot eagerness (0.8–1.2)
 var node: Node3D
 var uses_glb := false
 var animation_player: AnimationPlayer

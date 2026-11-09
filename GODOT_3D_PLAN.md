@@ -1,5 +1,11 @@
 # Godot 3D Port Plan
 
+> This is the original design plan for the 3D port (intent and rubric rationale); some
+> details below, such as the Godot version and the backup 2D scene, predate the build.
+> What was actually built is described in [`AS_BUILT.md`](AS_BUILT.md), and the online
+> multiplayer system added later (microservices, components, AI bot) in
+> [`ARCHITECTURE_ONLINE.md`](ARCHITECTURE_ONLINE.md).
+
 ## Goal
 
 Create a separate 3D Godot version of the football game while keeping the current 2D scene as backup.

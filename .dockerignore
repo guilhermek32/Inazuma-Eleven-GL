@@ -1,0 +1,11 @@
+.git
+.godot
+.claude
+obj
+build
+src
+include
+**/__pycache__
+**/.venv
+**/.pytest_cache
+.env

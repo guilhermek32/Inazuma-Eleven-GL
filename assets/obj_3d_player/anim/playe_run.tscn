@@ -1,10 +1,10 @@
 [gd_scene format=4 uid="uid://dkwy6hk8wppi7"]
 
-[ext_resource type="Texture2D" uid="uid://cfc85kn5rp7i2" path="res://assets/obj_3d_player/anim/running_Ch38_1001_Diffuse.png" id="1_u8ocr"]
-[ext_resource type="Texture2D" uid="uid://djf4xs0w70qvk" path="res://assets/obj_3d_player/anim/running_Ch38_1001_Glossiness.png" id="2_3yn1s"]
-[ext_resource type="Texture2D" uid="uid://ce8dm4jy35e4t" path="res://assets/obj_3d_player/anim/running_Ch38_1001_Normal.png" id="3_u3jgf"]
-[ext_resource type="Texture2D" uid="uid://bjm1a28eg5oe0" path="res://assets/obj_3d_player/anim/running_Ch38_1002_Diffuse.png" id="4_lj0f4"]
-[ext_resource type="Texture2D" uid="uid://owidjasnfji3" path="res://assets/obj_3d_player/anim/running_Ch38_1002_Normal.png" id="5_egfgh"]
+[ext_resource type="Texture2D" uid="uid://ntpvi4p6jv8u" path="res://assets/obj_3d_player/Ch38_nonPBR_Ch38_1001_Diffuse.png" id="1_u8ocr"]
+[ext_resource type="Texture2D" uid="uid://bw8drlsyutr0x" path="res://assets/obj_3d_player/Ch38_nonPBR_Ch38_1001_Glossiness.png" id="2_3yn1s"]
+[ext_resource type="Texture2D" uid="uid://bsldss2vkl3s" path="res://assets/obj_3d_player/Ch38_nonPBR_Ch38_1001_Normal.png" id="3_u3jgf"]
+[ext_resource type="Texture2D" uid="uid://bcfsjlvk0le1d" path="res://assets/obj_3d_player/Ch38_nonPBR_Ch38_1002_Diffuse.png" id="4_lj0f4"]
+[ext_resource type="Texture2D" uid="uid://c6dc0y08mi5ca" path="res://assets/obj_3d_player/Ch38_nonPBR_Ch38_1002_Normal.png" id="5_egfgh"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_djqv1"]
 resource_name = "Ch38_body"

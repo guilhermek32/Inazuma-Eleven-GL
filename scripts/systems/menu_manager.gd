@@ -1,18 +1,29 @@
 class_name MenuManager
 extends Node
 
-## Builds and drives all menu panels (main, how-to, settings, pause, full-time).
+## Builds and drives all menu panels (main, how-to, settings, pause, full-time)
+## and owns the Play Online screens (`online`, an OnlineMenu).
 ## `controller` is the match controller it asks to change game state / start a
 ## match; `settings` backs the settings panel. The controller owns the state
 ## machine and calls show_for_state()/refresh on transitions.
+##
+## For browser automation every shown page logs one line
+##   [ui] <page> <id>=<x>,<y> ...
+## with the centre, in window pixels, of each visible control tagged with a
+## "ui_id" meta (see log_layout()).
 
 var controller
 var settings: SettingsStore
 var menu_layer: CanvasLayer
 var menu_panels := {}
 var fulltime_label: Label
+# One [value A label, value B label] pair per FULLTIME_STAT_ROWS entry.
+var fulltime_stat_labels: Array = []
+var online: OnlineMenu
+var rematch_button: Button
+var new_online_button: Button
 
-func _build_menus() -> void:
+func build_menus() -> void:
 	menu_layer = CanvasLayer.new()
 	menu_layer.name = "MenuUI"
 	menu_layer.layer = 2
@@ -22,6 +33,12 @@ func _build_menus() -> void:
 	_build_settings_panel()
 	_build_pause_panel()
 	_build_fulltime_panel()
+	online = OnlineMenu.new()
+	online.name = "OnlineMenu"
+	online.controller = controller
+	online.settings = settings
+	add_child(online)
+	online.build(menu_layer)
 
 func _make_panel(panel_name: String, dim := true) -> Control:
 	var panel := Control.new()
@@ -55,8 +72,10 @@ func _make_title(parent: Control, text: String, size := 64) -> Label:
 	parent.add_child(label)
 	return label
 
-func _make_button(parent: Control, text: String, handler: Callable) -> Button:
+func _make_button(parent: Control, text: String, handler: Callable, ui_id := "") -> Button:
 	var button := Button.new()
+	if ui_id != "":
+		button.set_meta("ui_id", ui_id)
 	button.text = text
 	button.custom_minimum_size = Vector2(320, 52)
 	button.add_theme_font_size_override("font_size", 26)
@@ -73,10 +92,20 @@ func _build_main_menu() -> void:
 	var vb := _make_vbox(panel)
 	_make_title(vb, "INAZUMA ELEVEN", 72)
 	_make_title(vb, "GL", 32).add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
-	_make_button(vb, "Play Now", func() -> void: controller._set_game_state(GameConfig.GameState.MATCH_SETUP))
+	_make_button(vb, "Play Now", func() -> void: controller._set_game_state(GameConfig.GameState.MATCH_SETUP), "play_now")
+	_make_button(vb, "Play Online", func() -> void: controller._set_game_state(GameConfig.GameState.ONLINE), "play_online")
 	_make_button(vb, "How to Play", func() -> void: controller._set_game_state(GameConfig.GameState.HOWTO))
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Quit", func() -> void: controller.get_tree().quit())
+	# The online microservices behind Play Online, live (probed only while shown).
+	var services := ServiceStatusPanel.new(true)
+	services.name = "services"
+	services.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	services.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	services.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	services.offset_top = -28
+	services.offset_bottom = -28
+	panel.add_child(services)
 
 func _build_howto_panel() -> void:
 	var panel := _make_panel("howto")
@@ -85,7 +114,7 @@ func _build_howto_panel() -> void:
 	var text := Label.new()
 	text.add_theme_font_size_override("font_size", 22)
 	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	text.text = "CHOOSE SIDES (Play Now)\nEach device moves its own chip: pad left stick / D-pad, keyboard A / D.\nLeft = RED, right = BLUE. One device per side; an empty side is the AI.\nPress START / Space to begin once a side is filled.\n\nKEYBOARD + MOUSE\nMove: W A S D    Aim: Mouse\nShoot: hold SPACE to charge, release to kick    Pass: E    Switch: Q\n\nCONTROLLER\nMove: Left stick    Aim: Right stick\nShoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nControl auto-follows whoever wins the ball.\nPress ESC to pause."
+	text.text = "CHOOSE SIDES (Play Now)\nEach device moves its own chip: pad left stick / D-pad, keyboard A / D.\nLeft = TIME A, right = TIME B. One device per side; an empty side is the AI.\nPick each team's formation and kit colours (shirt / shorts / boots) here too.\nPress START / Space to begin once a side is filled.\n\nKEYBOARD + MOUSE\nMove: W A S D    Aim: Mouse    Sprint: SHIFT\nShoot: hold SPACE to charge, release to kick    Pass: E    Switch: Q    Tackle: CTRL / right-click\n\nCONTROLLER\nMove: Left stick    Aim: Right stick    Sprint: R2/RT\nShoot: R1/RB (hold to charge)    Pass: A    Switch: L1/LB    Tackle: X\n\nPLAY ONLINE\nCreate a room and share its code, or join a friend's room with theirs.\nKeyboard+mouse or a pad: whichever you used last. Esc leaves an online match.\n\nYour selected player keeps the ring — press Switch to jump to the nearest teammate.\nA tackle wins the ball back: time it from the front or side. From behind it is a foul (free kick).\nControl auto-follows whoever wins the ball. Press ESC to pause."
 	vb.add_child(text)
 	_make_button(vb, "Back", func() -> void: controller._set_game_state(controller.prev_menu_state))
 
@@ -98,12 +127,52 @@ func _build_pause_panel() -> void:
 	_make_button(vb, "Settings", func() -> void: controller._set_game_state(GameConfig.GameState.SETTINGS))
 	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU))
 
+const FULLTIME_STAT_ROWS := [
+	["Possession", "possession"],
+	["Shots", "shots"],
+	["On target", "on_target"],
+	["Steals", "steals"],
+	["Fouls", "fouls"],
+	["Offsides", "offsides"],
+]
+
 func _build_fulltime_panel() -> void:
 	var panel := _make_panel("fulltime")
 	var vb := _make_vbox(panel)
 	fulltime_label = _make_title(vb, "FULL TIME")
-	_make_button(vb, "Rematch", func() -> void: controller._start_match())
-	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU))
+	# Broadcast-style stats table: value A | stat name | value B per row.
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 34)
+	grid.add_theme_constant_override("v_separation", 4)
+	vb.add_child(grid)
+	for row in FULLTIME_STAT_ROWS:
+		var val_a := _stats_cell("0", HORIZONTAL_ALIGNMENT_RIGHT)
+		var name_lbl := _stats_cell(row[0], HORIZONTAL_ALIGNMENT_CENTER)
+		name_lbl.add_theme_color_override("font_color", Color(1.0, 0.93, 0.55))
+		var val_b := _stats_cell("0", HORIZONTAL_ALIGNMENT_LEFT)
+		grid.add_child(val_a)
+		grid.add_child(name_lbl)
+		grid.add_child(val_b)
+		fulltime_stat_labels.append([val_a, val_b])
+	rematch_button = _make_button(vb, "Rematch", func() -> void: controller._start_match(), "rematch")
+	new_online_button = _make_button(vb, "New Online Match", func() -> void: controller._set_game_state(GameConfig.GameState.ONLINE), "new_online")
+	new_online_button.visible = false
+	_make_button(vb, "Back to Menu", func() -> void: controller._set_game_state(GameConfig.GameState.MENU), "back_to_menu")
+
+## Online matches end with "New Online Match" (back to the lobby screens)
+## instead of an offline "Rematch".
+func set_fulltime_online(is_online: bool) -> void:
+	rematch_button.visible = not is_online
+	new_online_button.visible = is_online
+
+func _stats_cell(text: String, align: int) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.horizontal_alignment = align
+	lbl.custom_minimum_size = Vector2(120, 0)
+	lbl.add_theme_font_size_override("font_size", 22)
+	return lbl
 
 func _build_settings_panel() -> void:
 	var panel := _make_panel("settings")
@@ -125,6 +194,51 @@ func _build_settings_panel() -> void:
 	length_opt.selected = GameConfig.MATCH_LENGTHS.find(settings.half_length) if GameConfig.MATCH_LENGTHS.has(settings.half_length) else 0
 	length_opt.item_selected.connect(func(i: int) -> void: settings.half_length = GameConfig.MATCH_LENGTHS[i]; settings.save())
 	_settings_row(vb, "Match Length", length_opt)
+
+	var camera_opt := OptionButton.new()
+	camera_opt.add_item("Low")
+	camera_opt.add_item("Broadcast")
+	camera_opt.add_item("High")
+	camera_opt.add_item("Top-down")
+	camera_opt.selected = settings.camera_angle
+	camera_opt.item_selected.connect(func(i: int) -> void: settings.camera_angle = i; settings.apply(); settings.save())
+	_settings_row(vb, "Camera Angle", camera_opt)
+
+	var camdist_opt := OptionButton.new()
+	camdist_opt.add_item("Close")
+	camdist_opt.add_item("Normal")
+	camdist_opt.add_item("Far")
+	camdist_opt.add_item("Very Far")
+	camdist_opt.selected = settings.camera_distance
+	camdist_opt.item_selected.connect(func(i: int) -> void: settings.camera_distance = i; settings.apply(); settings.save())
+	_settings_row(vb, "Camera Distance", camdist_opt)
+
+	var fouls_check := CheckButton.new()
+	fouls_check.button_pressed = settings.fouls_enabled
+	fouls_check.toggled.connect(func(on: bool) -> void: settings.fouls_enabled = on; settings.save())
+	_settings_row(vb, "Fouls", fouls_check)
+
+	var offside_check := CheckButton.new()
+	offside_check.button_pressed = settings.offside_enabled
+	offside_check.toggled.connect(func(on: bool) -> void: settings.offside_enabled = on; settings.save())
+	_settings_row(vb, "Offside", offside_check)
+
+	var weather_opt := OptionButton.new()
+	weather_opt.add_item("Clear")
+	weather_opt.add_item("Rain")
+	weather_opt.selected = settings.weather
+	weather_opt.item_selected.connect(func(i: int) -> void:
+		settings.weather = i
+		settings.save()
+		controller._apply_weather())
+	_settings_row(vb, "Weather", weather_opt)
+	# A running match keeps the rules it kicked off with (its MatchConfig).
+	var rules_note := Label.new()
+	rules_note.text = "Difficulty, match length, rules and weather apply from the next match."
+	rules_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rules_note.add_theme_font_size_override("font_size", 16)
+	rules_note.add_theme_color_override("font_color", Color(0.75, 0.82, 0.95))
+	vb.add_child(rules_note)
 
 	var fs_check := CheckButton.new()
 	fs_check.button_pressed = settings.fullscreen
@@ -162,12 +276,18 @@ func _make_volume_slider(getter: Callable, setter: Callable) -> HSlider:
 func show_for_state(state: int) -> void:
 	for key in menu_panels:
 		(menu_panels[key] as Control).visible = false
+	online.panel.visible = state == GameConfig.GameState.ONLINE
+	if state == GameConfig.GameState.ONLINE:
+		online.show_page("home")
+		return
 	var active: Control = null
+	var page := ""
 	match state:
 		GameConfig.GameState.INTRO:
 			pass
 		GameConfig.GameState.MENU:
 			active = menu_panels.main
+			page = "main"
 		GameConfig.GameState.HOWTO:
 			active = menu_panels.howto
 		GameConfig.GameState.SETTINGS:
@@ -176,9 +296,36 @@ func show_for_state(state: int) -> void:
 			active = menu_panels.pause
 		GameConfig.GameState.FULLTIME:
 			active = menu_panels.fulltime
+			page = "fulltime"
 	if active != null:
 		active.visible = true
 		_focus_first_button(active)
+	if page != "":
+		log_layout(active, page)
+
+## Prints "[ui] <page> <id>=<x>,<y> ..." for every visible control under `root`
+## tagged with a "ui_id" meta: its centre in window pixels, after the layout of
+## the next frames has settled. Read by the browser e2e tests to click controls.
+static func log_layout(root: Control, page: String) -> void:
+	for i in 2:
+		await root.get_tree().process_frame
+	if not root.is_visible_in_tree():
+		return
+	var parts: PackedStringArray = []
+	_collect_layout(root, parts)
+	print("[ui] %s %s" % [page, " ".join(parts)])
+
+static func _collect_layout(node: Node, parts: PackedStringArray) -> void:
+	if node is Control:
+		var c := node as Control
+		if not c.visible:
+			return
+		if c.has_meta("ui_id"):
+			var xf := c.get_viewport().get_screen_transform() * c.get_global_transform_with_canvas()
+			var centre := xf * (c.size * 0.5)
+			parts.append("%s=%d,%d" % [c.get_meta("ui_id"), roundi(centre.x), roundi(centre.y)])
+	for child in node.get_children():
+		_collect_layout(child, parts)
 
 func _focus_first_button(node: Control) -> bool:
 	if node is Button and node.focus_mode != Control.FOCUS_NONE and node.visible and not (node as Button).disabled:
@@ -193,3 +340,27 @@ func _focus_first_button(node: Control) -> bool:
 func set_fulltime_text(text: String) -> void:
 	if fulltime_label != null:
 		fulltime_label.text = text
+
+## Fills the full-time stats table. Possession is shown as percentages of the
+## combined ownership time; the other rows are plain counters. The value columns
+## are tinted with each team's shirt colour.
+## Blanks the full-time stats grid (a match that ended without a result).
+func clear_fulltime_stats() -> void:
+	for pair in fulltime_stat_labels:
+		pair[0].text = "-"
+		pair[1].text = "-"
+
+func set_fulltime_stats(stats: Array[Dictionary], col_a: Color, col_b: Color) -> void:
+	var total_poss: float = maxf(0.001, stats[0].possession + stats[1].possession)
+	for i in FULLTIME_STAT_ROWS.size():
+		var key: String = FULLTIME_STAT_ROWS[i][1]
+		var pair: Array = fulltime_stat_labels[i]
+		if key == "possession":
+			pair[0].text = "%d%%" % roundi(stats[0].possession / total_poss * 100.0)
+			pair[1].text = "%d%%" % roundi(stats[1].possession / total_poss * 100.0)
+		else:
+			# Counts; online they come back from JSON as floats ("3.0").
+			pair[0].text = str(int(stats[0][key]))
+			pair[1].text = str(int(stats[1][key]))
+		pair[0].add_theme_color_override("font_color", col_a.lightened(0.35))
+		pair[1].add_theme_color_override("font_color", col_b.lightened(0.35))

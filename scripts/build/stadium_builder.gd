@@ -4,12 +4,18 @@ extends RefCounted
 ## Builds the night environment, broadcast camera, floodlights and the stadium
 ## shell (stands, walls, hoardings, crowd). `host` receives the top-level nodes
 ## (environment/camera/lights); `stadium_root` the structure.
-## After `_build_camera()`, read back `camera_rig`/`camera_3d`.
+## After `build_camera()`, read back `camera_rig`/`camera_3d`.
+##
+## `web_tier` (set before any build_* call, see RenderTier) selects the
+## Compatibility-renderer variant: no SSAO/SSIL/volumetric fog/VoxelGI (they
+## don't exist there), compensated by the WEB_* ambient, depth fog and glow
+## values below; fewer shadowed floodlights and a thinner crowd. With it unset
+## every build_* call produces the desktop Forward+ look unchanged.
 
 # Stand placement, as fractions of FIELD_SCALE. The /18.0 denominators are legacy
 # proportions from when the pitch spanned 18 world units; kept so the stadium keeps
 # its tuned look at the current FIELD_SCALE. Shared so the stand shells
-# (_build_stadium) and the crowd banks (_add_crowd) stay aligned.
+# (build_stadium) and the crowd banks (_add_crowd) stay aligned.
 const STAND_GAP_Z := 5.0 / 18.0    # north/south stands: gap from pitch edge
 const STAND_GAP_X := 5.5 / 18.0    # east/west stands: gap from pitch edge
 
@@ -19,11 +25,84 @@ var stadium_root: Node3D
 var camera_rig: Node3D
 var camera_3d: Camera3D
 var voxel_gi: VoxelGI
+var rain: GPUParticles3D
+# Environment handle kept so weather can retune fog/ambience at runtime.
+var env: Environment
+var web_tier := false
 
-func _build_environment() -> void:
+# Fog/ambience per weather: clear stays a faint haze; rain gets denser and dimmer.
+const FOG_DENSITY_CLEAR := 0.004
+const FOG_DENSITY_RAIN := 0.006
+const AMBIENT_ENERGY_CLEAR := 0.4
+const AMBIENT_ENERGY_RAIN := 0.28
+
+# Web tier (Compatibility) compensation. Without GI bounce and SSIL the turf and
+# stands lose their fill light, so ambient is raised; standard depth fog stands
+# in for the volumetric haze (far end falls off into the night); a little more
+# glow keeps the floodlamps and neon boards reading as light sources.
+const WEB_AMBIENT_ENERGY_CLEAR := 0.62
+const WEB_AMBIENT_ENERGY_RAIN := 0.46
+const WEB_FOG_DENSITY_CLEAR := 0.0035
+const WEB_FOG_DENSITY_RAIN := 0.006
+const WEB_FOG_COLOR := Color(0.22, 0.25, 0.31)
+const WEB_GLOW_INTENSITY := 0.8
+const WEB_GLOW_BLOOM := 0.25
+# Only these towers cast shadows on the web (the far pair: their shadows fall
+# toward the broadcast camera); each shadowed spot is an extra scene pass there.
+const WEB_SHADOW_TOWERS := [0, 1]
+const WEB_SHADOW_ATLAS_SIZE := 2048
+# Crowd banks: rows per stand and seat spacing (FULL uses 7 rows, 0.6 spacing).
+const WEB_CROWD_ROWS := 5
+const WEB_CROWD_SPACING := 0.85
+
+## One GPU particle emitter of falling streak quads over the pitch; built once,
+## toggled by set_rain_active() when the Weather setting changes.
+func build_weather() -> void:
+	rain = GPUParticles3D.new()
+	rain.name = "Rain"
+	rain.amount = GameConfig.RAIN_PARTICLES
+	rain.lifetime = 1.6
+	rain.emitting = false
+	rain.visible = false
+	rain.visibility_aabb = AABB(Vector3(-42.0, -26.0, -32.0), Vector3(84.0, 30.0, 64.0))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(40.0, 1.0, 30.0)
+	pm.direction = Vector3(0.0, -1.0, 0.0)
+	pm.spread = 2.0
+	pm.initial_velocity_min = 17.0
+	pm.initial_velocity_max = 23.0
+	pm.gravity = Vector3(0.0, -9.0, 0.0)
+	rain.process_material = pm
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.02, 0.55)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0.65, 0.75, 0.95, 0.30)
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y   # spin around Y only: streaks stay vertical
+	streak.material = m
+	rain.draw_pass_1 = streak
+	rain.position = Vector3(0.0, 24.0, 0.0)
+	stadium_root.add_child(rain)
+
+func set_rain_active(active: bool) -> void:
+	if rain == null:
+		return
+	rain.emitting = active
+	rain.visible = active
+	# Rain nights read moodier: slightly denser fog and dimmer ambient fill.
+	if env != null and web_tier:
+		env.fog_density = WEB_FOG_DENSITY_RAIN if active else WEB_FOG_DENSITY_CLEAR
+		env.ambient_light_energy = WEB_AMBIENT_ENERGY_RAIN if active else WEB_AMBIENT_ENERGY_CLEAR
+	elif env != null:
+		env.volumetric_fog_density = FOG_DENSITY_RAIN if active else FOG_DENSITY_CLEAR
+		env.ambient_light_energy = AMBIENT_ENERGY_RAIN if active else AMBIENT_ENERGY_CLEAR
+
+func build_environment() -> void:
 	var world := WorldEnvironment.new()
 	world.name = "WorldEnvironment"
-	var env := Environment.new()
+	env = Environment.new()
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
 	sky_mat.sky_top_color = Color(0.010, 0.018, 0.045)
@@ -36,8 +115,9 @@ func _build_environment() -> void:
 	# IBL: drive ambient and reflections from the procedural night sky so metallic
 	# surfaces (posts, poles) catch the sky colour instead of a flat grey fill.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_color = Color(0.45, 0.55, 0.78)
-	env.ambient_light_energy = 0.5
+	# Near-neutral ambient: the old blue fill pushed the whole pitch toward cyan.
+	env.ambient_light_color = Color(0.62, 0.66, 0.72)
+	env.ambient_light_energy = AMBIENT_ENERGY_CLEAR
 	# ACES HDR tonemapping: cinematic highlight roll-off so the bright floodlights
 	# and neon signs compress gracefully instead of blowing out.
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
@@ -51,6 +131,11 @@ func _build_environment() -> void:
 	env.glow_strength = 1.2
 	env.glow_bloom = 0.2
 	env.glow_hdr_threshold = 1.1
+	if web_tier:
+		_apply_web_environment()
+		world.environment = env
+		host.add_child(world)
+		return
 	# SSAO: screen-space ambient occlusion darkens contact areas (players on grass,
 	# inside goal mouth, stand tiers) without expensive ray-traced GI.
 	env.ssao_enabled = true
@@ -63,20 +148,33 @@ func _build_environment() -> void:
 	env.ssil_radius = 6.0
 	env.ssil_intensity = 1.4
 	# Volumetric fog: faint stadium haze so the floodlight cones become visible light
-	# shafts and the far end of the pitch falls off with atmospheric depth.
+	# shafts and the far end of the pitch falls off with atmospheric depth. Kept very
+	# thin — denser values wash the far pitch into a milky cyan haze.
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.012
-	env.volumetric_fog_albedo = Color(0.85, 0.90, 1.0)
+	env.volumetric_fog_density = FOG_DENSITY_CLEAR
+	env.volumetric_fog_albedo = Color(0.90, 0.90, 0.92)
 	env.volumetric_fog_emission = Color(0.0, 0.0, 0.0)
 	env.volumetric_fog_emission_energy = 0.0
 	env.volumetric_fog_gi_inject = 1.0
-	env.volumetric_fog_ambient_inject = 0.4
+	env.volumetric_fog_ambient_inject = 0.15
 	env.volumetric_fog_length = 96.0
 	env.volumetric_fog_detail_spread = 2.0
 	world.environment = env
 	host.add_child(world)
 
-func _build_camera() -> void:
+## Compatibility stand-ins for the Forward+-only effects (see the WEB_* constants).
+func _apply_web_environment() -> void:
+	env.ambient_light_energy = WEB_AMBIENT_ENERGY_CLEAR
+	env.glow_intensity = WEB_GLOW_INTENSITY
+	env.glow_bloom = WEB_GLOW_BLOOM
+	env.fog_enabled = true
+	env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
+	env.fog_light_color = WEB_FOG_COLOR
+	env.fog_light_energy = 1.0
+	env.fog_density = WEB_FOG_DENSITY_CLEAR
+	env.fog_sky_affect = 0.0
+
+func build_camera() -> void:
 	camera_rig = Node3D.new()
 	camera_rig.name = "CameraRig"
 	var s := GameConfig.FIELD_SCALE
@@ -89,19 +187,19 @@ func _build_camera() -> void:
 	camera_rig.add_child(camera_3d)
 	camera_3d.look_at(Vector3.ZERO, Vector3.UP)
 
-func _build_lighting() -> void:
+func build_lighting() -> void:
 	# Bigger positional shadow atlas so each of the four far floodlights gets enough
 	# texels to resolve a crisp player shadow (default 2048 split four ways is too
 	# coarse for cones firing across the whole pitch from the corners).
 	var vp := host.get_viewport()
 	if vp != null:
-		vp.positional_shadow_atlas_size = 4096
+		vp.positional_shadow_atlas_size = WEB_SHADOW_ATLAS_SIZE if web_tier else 4096
 		vp.positional_shadow_atlas_quad_0 = Viewport.SHADOW_ATLAS_QUADRANT_SUBDIV_1
 		vp.positional_shadow_atlas_quad_1 = Viewport.SHADOW_ATLAS_QUADRANT_SUBDIV_4
 	var moon := DirectionalLight3D.new()
 	moon.name = "MoonLight"
-	moon.light_color = Color(0.60, 0.68, 0.88)
-	moon.light_energy = 0.9
+	moon.light_color = Color(0.72, 0.76, 0.86)
+	moon.light_energy = 0.7
 	moon.light_specular = 0.5
 	moon.light_angular_distance = 0.8
 	# Moon is fill light only — its single hard CSM shadow was the lone visible one
@@ -131,7 +229,9 @@ func _build_lighting() -> void:
 # goals, emissive hoardings) is built; bake() is triggered separately by
 # the controller, deferred one frame and before the dynamic players exist, so the
 # probe captures only static surfaces and the coloured neon spill bounces onto turf.
-func _build_gi() -> void:
+func build_gi() -> void:
+	if web_tier:
+		return   # VoxelGI is Forward+-only; skipping it also skips the load-time bake
 	var s := GameConfig.FIELD_SCALE
 	voxel_gi = VoxelGI.new()
 	voxel_gi.name = "VoxelGI"
@@ -141,7 +241,7 @@ func _build_gi() -> void:
 	voxel_gi.position = Vector3(0.0, 5.0, 0.0)
 	host.add_child(voxel_gi)
 
-func _bake_gi() -> void:
+func bake_gi() -> void:
 	if voxel_gi != null:
 		voxel_gi.bake()
 
@@ -152,14 +252,14 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	parent.add_child(tower)
 	# Thick tapered steel mast rising from the ground to the head (lit metal so the
 	# pole itself reads clearly as a structure, not a hairline).
-	var pole := mf._mesh("Pole", CylinderMesh.new(), mf.materials.metal_mast, Vector3.ZERO)
+	var pole := mf.make_mesh("Pole", CylinderMesh.new(), mf.materials.metal_mast, Vector3.ZERO)
 	pole.mesh.height = pos.y
 	pole.mesh.top_radius = 0.45
 	pole.mesh.bottom_radius = 0.70
 	pole.position.y = -pos.y * 0.5
 	tower.add_child(pole)
 	# Base plinth so the pole reads as planted in the ground.
-	var base := mf._mesh("MastBase", CylinderMesh.new(), mf.materials.metal_dark, Vector3(0.0, -pos.y + 0.4, 0.0))
+	var base := mf.make_mesh("MastBase", CylinderMesh.new(), mf.materials.metal_dark, Vector3(0.0, -pos.y + 0.4, 0.0))
 	base.mesh.height = 0.8
 	base.mesh.top_radius = 0.9
 	base.mesh.bottom_radius = 1.1
@@ -171,7 +271,14 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	tower.add_child(head)
 	head.look_at(Vector3.ZERO, Vector3.UP)
 	_build_lamp_bank(head)
-	# Warm omni accent at the head: local emissive halo around the fitting.
+	var casts_shadow := not web_tier or index in WEB_SHADOW_TOWERS
+	# Warm omni accent at the head: local emissive halo around the fitting. The web
+	# tier leaves it to the emissive lamp cells + glow (one light fewer per object).
+	if not web_tier:
+		_add_lamp_accent(head)
+	_add_floodlight_spot(head, casts_shadow)
+
+func _add_lamp_accent(head: Node3D) -> void:
 	var accent := OmniLight3D.new()
 	accent.name = "LampAccent"
 	accent.light_color = Color(0.9, 0.95, 1.0)
@@ -180,6 +287,8 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	accent.omni_attenuation = 2.0
 	accent.shadow_enabled = false
 	head.add_child(accent)
+
+func _add_floodlight_spot(head: Node3D, casts_shadow: bool) -> void:
 	# Spot (cone source): crisp falloff, specular highlights on players/posts.
 	# All four towers cast soft shadows for the classic overlapping-shadows look.
 	# Parented to the head and pushed out IN FRONT of the lamp cells so the fixture
@@ -189,11 +298,13 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 	spot.light_color = Color(0.85, 0.92, 1.0)
 	spot.light_energy = 30.0
 	spot.light_specular = 1.0
-	spot.spot_range = 90.0
+	spot.spot_range = 110.0
 	spot.spot_angle = 50.0
 	spot.spot_attenuation = 1.4
 	spot.light_size = 0.9        # tighter source → crisper, readable shadow edges
-	spot.shadow_enabled = true
+	# Damp how much the beam feeds the volumetric fog: subtle shaft, not a white blob.
+	spot.light_volumetric_fog_energy = 0.35
+	spot.shadow_enabled = casts_shadow
 	spot.shadow_blur = 0.6
 	spot.shadow_bias = 0.03
 	spot.position = Vector3(0.0, 0.0, -1.7)
@@ -205,12 +316,12 @@ func _add_floodlight(parent: Node3D, pos: Vector3, index: int) -> void:
 func _build_lamp_bank(head: Node3D) -> void:
 	# Short bracket arm tying the housing to the mast top. The fixture geometry never
 	# casts shadows — otherwise it would occlude its own (and neighbouring) floodlights.
-	var arm := mf._mesh("LampArm", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, 0.4))
+	var arm := mf.make_mesh("LampArm", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, 0.4))
 	arm.mesh.size = Vector3(0.35, 0.35, 1.0)
 	arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	head.add_child(arm)
 	# Deep housing box: width × height × depth, so it has real volume from any angle.
-	var housing := mf._mesh("LampHousing", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, -0.7))
+	var housing := mf.make_mesh("LampHousing", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.0, -0.7))
 	housing.mesh.size = Vector3(4.4, 2.6, 1.2)
 	housing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	head.add_child(housing)
@@ -220,12 +331,12 @@ func _build_lamp_bank(head: Node3D) -> void:
 		for c in cols:
 			var cx := (float(c) - float(cols - 1) * 0.5) * 1.0
 			var cy := (float(r) - float(rows - 1) * 0.5) * 0.78
-			var cell := mf._mesh("LampCell%d_%d" % [r, c], BoxMesh.new(), mf.materials.floodlamp, Vector3(cx, cy, -1.35))
+			var cell := mf.make_mesh("LampCell%d_%d" % [r, c], BoxMesh.new(), mf.materials.floodlamp, Vector3(cx, cy, -1.35))
 			cell.mesh.size = Vector3(0.82, 0.62, 0.22)
 			cell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			head.add_child(cell)
 
-func _build_stadium() -> void:
+func build_stadium() -> void:
 	var field_x := GameConfig.FIELD_HALF_WIDTH * GameConfig.FIELD_SCALE
 	var field_z := GameConfig.FIELD_HALF_HEIGHT * GameConfig.FIELD_SCALE
 	var s := GameConfig.FIELD_SCALE
@@ -241,7 +352,7 @@ func _build_stadium() -> void:
 	_add_hoardings()
 
 func _add_ground_apron() -> void:
-	var apron := mf._mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
+	var apron := mf.make_mesh("GroundApron", BoxMesh.new(), mf.materials.asphalt, Vector3(0.0, -0.06, 0.0))
 	var s := GameConfig.FIELD_SCALE
 	apron.mesh.size = Vector3(s * (72.0 / 18.0), 0.08, s * (68.0 / 18.0))
 	apron.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -256,10 +367,10 @@ func _add_perimeter_walls() -> void:
 		["EastWall", Vector3(s * (35.7 / 18.0), 4.0, 0.0), Vector3(0.6, 8.0, s * (68.0 / 18.0))],
 	]
 	for w in walls:
-		var wall := mf._mesh(w[0], BoxMesh.new(), mf.materials.wall, w[1])
+		var wall := mf.make_mesh(w[0], BoxMesh.new(), mf.materials.wall, w[1])
 		wall.mesh.size = w[2]
 		stadium_root.add_child(wall)
-		var band := mf._mesh("%sBand" % w[0], BoxMesh.new(), mf.materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
+		var band := mf.make_mesh("%sBand" % w[0], BoxMesh.new(), mf.materials.wall_top, w[1] + Vector3(0.0, 4.35, 0.0))
 		band.mesh.size = Vector3(maxf(w[2].x, 0.8), 0.7, maxf(w[2].z, 0.8))
 		stadium_root.add_child(band)
 	var sign := Label3D.new()
@@ -302,13 +413,18 @@ func _add_hoarding(pos: Vector3, yaw: float, text: String, idx: int) -> void:
 	board.position = pos
 	board.rotation = Vector3(-0.12, yaw, 0.0)
 	stadium_root.add_child(board)
-	var frame := mf._mesh("Frame", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.46, -0.04))
+	var frame := mf.make_mesh("Frame", BoxMesh.new(), mf.materials.metal_dark, Vector3(0.0, 0.46, -0.04))
 	frame.mesh.size = Vector3(3.7, 0.92, 0.08)
 	board.add_child(frame)
 	var scheme: int = idx % mf.materials.ad_panels.size()
-	var panel := mf._mesh("Panel", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
+	var panel := mf.make_mesh("Panel", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, 0.02))
 	panel.mesh.size = Vector3(3.55, 0.78, 0.05)
 	board.add_child(panel)
+	# Matching emissive panel on the back face so the boards nearest the camera
+	# glow too instead of reading as unlit black slabs.
+	var back_panel := mf.make_mesh("PanelBack", BoxMesh.new(), mf.materials.ad_panels[scheme], Vector3(0.0, 0.46, -0.10))
+	back_panel.mesh.size = Vector3(3.55, 0.78, 0.05)
+	board.add_child(back_panel)
 	var label := Label3D.new()
 	label.name = "AdText"
 	label.text = text
@@ -323,11 +439,11 @@ func _add_stand(stand_name: String, pos: Vector3, size: Vector3, mat: StandardMa
 	stand.position = pos
 	stadium_root.add_child(stand)
 	for tier in 4:
-		var tier_mesh := mf._mesh("Tier%d" % tier, BoxMesh.new(), mat, Vector3(0.0, float(tier) * 0.55, 0.0))
+		var tier_mesh := mf.make_mesh("Tier%d" % tier, BoxMesh.new(), mat, Vector3(0.0, float(tier) * 0.55, 0.0))
 		tier_mesh.mesh.size = Vector3(size.x - float(tier) * 0.55, 0.42, size.z - float(tier) * 0.35)
 		stand.add_child(tier_mesh)
 		var seat_mat: Material = mf.materials.seat_red if tier % 2 == 0 else mf.materials.seat_blue
-		var seat := mf._mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
+		var seat := mf.make_mesh("SeatBand%d" % tier, BoxMesh.new(), seat_mat, Vector3(0.0, float(tier) * 0.55 + 0.27, 0.0))
 		seat.mesh.size = Vector3(tier_mesh.mesh.size.x * 0.94, 0.08, tier_mesh.mesh.size.z * 0.72)
 		stand.add_child(seat)
 
@@ -360,10 +476,10 @@ func _add_crowd(field_x: float, field_z: float) -> void:
 	mixed.append_array(neutrals)
 	var skins := [Color(0.86, 0.66, 0.52), Color(0.72, 0.52, 0.38), Color(0.52, 0.36, 0.24), Color(0.94, 0.78, 0.62)]
 
-	var n_depth := 7
+	var n_depth := WEB_CROWD_ROWS if web_tier else 7
 	var depth_step := 0.55
 	var rise_step := 0.34
-	var col_spacing := 0.6
+	var col_spacing := WEB_CROWD_SPACING if web_tier else 0.6
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xC0DDED
 

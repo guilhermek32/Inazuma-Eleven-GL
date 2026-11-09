@@ -10,6 +10,7 @@ extends Node
 const GK_STRAFE_MIN_VEL := 0.0012
 
 var sim: MatchSimulation
+var settings: SettingsStore   # camera presets only
 var material_factory: MaterialFactory
 var audio: AudioManager
 var ball_root: Node3D
@@ -17,11 +18,26 @@ var vfx_root: Node3D
 var camera_rig: Node3D
 var camera_3d: Camera3D
 
+# Goal side (-1/+1) -> that goal's net ShaderMaterial; assigned by the controller
+# from PitchBuilder. The ripple animates here so the sim stays presentation-free.
+var net_materials := {}
+var _ripple_side := 0
+var _ripple_t := 0.0
+
+var _anim_speed := 1.0
+
 var ball_trail: Array[MeshInstance3D] = []
 var ball_trail_points: Array[Vector3] = []
-var confetti: Array[VfxParticle] = []
 var celebration_timer := 0.0
 var camera_look := Vector3.ZERO
+
+# Goal confetti: three pre-built MultiMeshes (gold/red/blue), one draw call each,
+# so a goal never allocates nodes. Dead pieces are hidden with a zero-scale basis.
+const CONFETTI_PER_COLOR := 48
+var confetti_mms: Array[MultiMesh] = []
+var confetti_vel: Array = []      # per pool: PackedVector3Array
+var confetti_life: Array = []     # per pool: PackedFloat32Array
+var confetti_cursor: Array[int] = []
 
 # Ball grass-trail: a ring buffer of Decal nodes pressed into the turf along the
 # ball's ground path, each fading over MARK_LIFETIME seconds.
@@ -41,7 +57,44 @@ func reset_trail() -> void:
 	# existing grass marks keep fading naturally.
 	last_mark_pos = Vector2(1.0e9, 1.0e9)
 
-func _create_ball() -> void:
+## Immediately hides any live confetti particles (called on match start so
+## leftover pieces from the previous match don't bleed into the new one).
+func clear_confetti() -> void:
+	for pool in confetti_mms.size():
+		for slot in CONFETTI_PER_COLOR:
+			confetti_life[pool][slot] = 0.0
+			confetti_mms[pool].set_instance_transform(slot, _hidden_xform())
+
+func _hidden_xform() -> Transform3D:
+	return Transform3D(Basis().scaled(Vector3.ZERO), Vector3(0.0, -10.0, 0.0))
+
+## Builds the confetti MultiMesh pools once at startup.
+func create_confetti() -> void:
+	var mats: Array = [material_factory.materials.confetti_gold,
+			material_factory.materials.confetti_red,
+			material_factory.materials.confetti_blue]
+	for mat in mats:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		var piece := BoxMesh.new()
+		piece.size = Vector3(0.10, 0.035, 0.16)
+		mm.mesh = piece
+		mm.instance_count = CONFETTI_PER_COLOR
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "ConfettiPool"
+		mmi.multimesh = mm
+		mmi.material_override = mat
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		vfx_root.add_child(mmi)
+		confetti_mms.append(mm)
+		confetti_vel.append(PackedVector3Array())
+		confetti_vel[-1].resize(CONFETTI_PER_COLOR)
+		confetti_life.append(PackedFloat32Array())
+		confetti_life[-1].resize(CONFETTI_PER_COLOR)
+		confetti_cursor.append(0)
+	clear_confetti()
+
+func create_ball() -> void:
 	var root := Node3D.new()
 	root.name = "Ball3D"
 	if not _add_ball_glb(root):
@@ -53,7 +106,7 @@ func _create_ball() -> void:
 	glow.omni_range = 5.0
 	root.add_child(glow)
 	# Elemental aura orb, hidden until a named special shot is in flight.
-	var aura := material_factory._mesh("SpecialAura", SphereMesh.new(), material_factory.materials.special_aura, Vector3.ZERO)
+	var aura := material_factory.make_mesh("SpecialAura", SphereMesh.new(), material_factory.materials.special_aura, Vector3.ZERO)
 	(aura.mesh as SphereMesh).radius = GameConfig.BALL_RADIUS * 2.2
 	(aura.mesh as SphereMesh).height = GameConfig.BALL_RADIUS * 4.4
 	aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -84,16 +137,16 @@ func _add_ball_glb(root: Node3D) -> bool:
 	return true
 
 func _add_fallback_ball(root: Node3D) -> void:
-	var mesh := material_factory._mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)
+	var mesh := material_factory.make_mesh("BallMesh", SphereMesh.new(), material_factory.materials.ball, Vector3.ZERO)
 	mesh.mesh.radius = GameConfig.BALL_RADIUS
 	mesh.mesh.height = GameConfig.BALL_RADIUS * 2.0
 	mesh.mesh.radial_segments = 32
 	mesh.mesh.rings = 16
 	root.add_child(mesh)
 
-func _create_ball_trail() -> void:
+func create_ball_trail() -> void:
 	for i in 10:
-		var trail := material_factory._mesh("BallTrail%d" % i, SphereMesh.new(), material_factory.materials.trail, Vector3.ZERO)
+		var trail := material_factory.make_mesh("BallTrail%d" % i, SphereMesh.new(), material_factory.materials.trail, Vector3.ZERO)
 		trail.mesh.radius = 0.12 - float(i) * 0.007
 		trail.mesh.height = trail.mesh.radius * 2.0
 		trail.visible = false
@@ -102,9 +155,9 @@ func _create_ball_trail() -> void:
 
 ## Pool of decals that mark the grass where the ball rolls. Built once; all hidden
 ## until the ball moves over them. Shared albedo/normal textures (one each).
-func _create_grass_marks() -> void:
-	var albedo := material_factory._decal_albedo_texture()
-	var normal := material_factory._decal_normal_texture()
+func create_grass_marks() -> void:
+	var albedo := material_factory.decal_albedo_texture()
+	var normal := material_factory.decal_normal_texture()
 	for i in 48:
 		var mark := Decal.new()
 		mark.name = "GrassMark%d" % i
@@ -120,21 +173,43 @@ func _create_grass_marks() -> void:
 		grass_marks.append(mark)
 		grass_mark_life.append(0.0)
 
-func _update_visuals(delta: float) -> void:
-	for i in sim.team_red.size():
-		_update_player_visual(sim.team_red[i], sim.ball.owner_team == 0 and sim.ball.owner_index == i, delta)
-	for i in sim.team_blue.size():
-		_update_player_visual(sim.team_blue[i], sim.ball.owner_team == 1 and sim.ball.owner_index == i, delta)
+func update_visuals(delta: float) -> void:
+	for t in 2:
+		var players := sim.teams[t].players
+		for i in players.size():
+			_update_player_visual(players[i], i, sim.ball.owner_team == t and sim.ball.owner_index == i, delta)
 	_update_ball_visual(delta)
 	_update_camera(delta)
+	_update_net_ripple(delta)
 	if celebration_timer > 0.0:
 		celebration_timer = maxf(0.0, celebration_timer - delta)
 
-func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+## Kicks off the net-ripple on the conceding goal's net at the ball's impact point.
+func trigger_net_ripple(goal_side: int, impact_world: Vector3) -> void:
+	if not net_materials.has(goal_side):
+		return
+	_ripple_side = goal_side
+	_ripple_t = 0.0
+	var mat: ShaderMaterial = net_materials[goal_side]
+	mat.set_shader_parameter("impact_world", impact_world)
+	mat.set_shader_parameter("ripple_strength", 0.35)
+	mat.set_shader_parameter("ripple_time", 0.0)
+
+func _update_net_ripple(delta: float) -> void:
+	if _ripple_side == 0:
+		return
+	_ripple_t += delta
+	var mat: ShaderMaterial = net_materials[_ripple_side]
+	mat.set_shader_parameter("ripple_time", _ripple_t)
+	if _ripple_t > 1.4:
+		mat.set_shader_parameter("ripple_strength", 0.0)
+		_ripple_side = 0
+
+func _update_player_visual(p: PlayerState, player_index: int, owns_ball: bool, delta: float) -> void:
 	if p.node == null:
 		return
 	if p.uses_glb:
-		_update_glb_player_visual(p, owns_ball, delta)
+		_update_glb_player_visual(p, player_index, owns_ball, delta)
 		return
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := _facing_vector(p)
@@ -145,10 +220,9 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	(p.node.get_node("ArmR") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegL") as Node3D).rotation.x = -swing
 	(p.node.get_node("LegR") as Node3D).rotation.x = swing
-	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
 	var t := p.team_index
-	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
-	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
+	var is_selected := sim.team_is_human(t) and player_index == sim.teams[t].selected_index
+	var is_candidate := sim.team_is_human(t) and player_index == sim.teams[t].switch_candidate
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
@@ -159,11 +233,13 @@ func _update_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> voi
 	else:
 		p.node.position.y = 0.0
 
-func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) -> void:
+func _update_glb_player_visual(p: PlayerState, player_index: int, owns_ball: bool, delta: float) -> void:
 	p.node.position = GameConfig.to_3d(Vector2(p.x, p.y), 0.0)
 	var face := _facing_vector(p)
 	if face.length() > 0.001:
 		p.node.rotation.y = atan2(face.x, face.z)
+	if p.role == GameConfig.PlayerRole.GOALKEEPER:
+		_update_gk_dive_pose(p)
 	if p.action_timer > 0.0:
 		p.action_timer = maxf(0.0, p.action_timer - delta)
 	else:
@@ -173,15 +249,35 @@ func _update_glb_player_visual(p: PlayerState, owns_ball: bool, delta: float) ->
 			p.set_visual_state("run" if p.is_moving else "idle")
 	p.prev_x = p.x
 	p.prev_y = p.y
-	var player_index := sim.team_red.find(p) if p.team_index == 0 else sim.team_blue.find(p)
 	var t := p.team_index
-	var is_selected := sim.team_is_human(t) and player_index == sim.selected_index[t]
-	var is_candidate := sim.team_is_human(t) and player_index == sim.switch_candidate_index[t]
+	var is_selected := sim.team_is_human(t) and player_index == sim.teams[t].selected_index
+	var is_candidate := sim.team_is_human(t) and player_index == sim.teams[t].switch_candidate
 	(p.node.get_node("SelectedRing") as Node3D).visible = is_selected
 	(p.node.get_node("NextRing") as Node3D).visible = is_candidate and not is_selected and not owns_ball
 	var power_ring := p.node.get_node("PowerRing") as Node3D
 	power_ring.visible = p.kick_power > 0.01
 	power_ring.scale = Vector3.ONE * (0.55 + p.kick_power * 0.55)
+
+# Keeper dive: while sim.gk_dive_timer runs, play a dive clip if the animation
+# library has one, otherwise procedurally roll the Model child toward the dive
+# side (the root's rotation.y is rewritten every frame, so tilt the child).
+func _update_gk_dive_pose(p: PlayerState) -> void:
+	var model := p.node.get_node_or_null("Model") as Node3D
+	if model == null:
+		return
+	if p.gk_dive_timer <= 0.0:
+		model.rotation.z = 0.0
+		return
+	# Same handedness logic as _gk_move_state: facing x movement cross product
+	# decides whether the dive is to the keeper's own left or right.
+	var facing := Vector2(sim.ball.x - p.x, sim.ball.y - p.y)
+	var cross := facing.x * float(p.gk_dive_dir)
+	var clip := "gk_dive_left" if cross > 0.0 else "gk_dive_right"
+	if p.animation_player != null and p.animation_player.has_animation(clip):
+		p.play_action(clip, GameConfig.GK_DIVE_DURATION)
+		return
+	var phase := 1.0 - p.gk_dive_timer / GameConfig.GK_DIVE_DURATION
+	model.rotation.z = sin(phase * PI) * deg_to_rad(65.0) * (1.0 if cross > 0.0 else -1.0)
 
 # Picks the forward-facing sideways shuffle clip for a moving keeper. The keeper always
 # faces the ball, so the shuffle is purely lateral: the sign of (facing × movement) tells
@@ -215,7 +311,8 @@ func _update_ball_visual(delta: float) -> void:
 	if sim.ball.node == null:
 		return
 	var speed := Vector2(sim.ball.vx, sim.ball.vy).length()
-	var visual_height := 0.26 + minf(0.55, speed * 0.22)
+	# The ball's simulated flight height, plus its radius so it rests on the turf.
+	var visual_height := GameConfig.BALL_RADIUS + 0.06 + sim.ball.h
 	sim.ball.node.position = GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), visual_height)
 	sim.ball.node.rotate_x(speed * delta * 14.0)
 	sim.ball.node.rotate_z(sim.ball.spin * delta)
@@ -257,7 +354,7 @@ func _update_grass_marks(speed: float, delta: float) -> void:
 		return
 	var ground := GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.3)
 	var ground2 := Vector2(ground.x, ground.z)
-	if speed > 0.04 and ground2.distance_to(last_mark_pos) > MARK_SPACING:
+	if speed > 0.04 and sim.ball.h < 0.25 and ground2.distance_to(last_mark_pos) > MARK_SPACING:
 		last_mark_pos = ground2
 		var mark := grass_marks[grass_mark_index]
 		var sc := randf_range(0.85, 1.3)
@@ -296,46 +393,71 @@ func _update_camera(delta: float) -> void:
 	if camera_rig == null or camera_3d == null:
 		return
 	var _fs := GameConfig.FIELD_SCALE
-	var target_pos := Vector3(clampf(sim.ball.x * _fs * 0.25, -_fs * (5.0 / 18.0), _fs * (5.0 / 18.0)), _fs, _fs * (4.0 / 3.0) + clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0)))
+	# Height and base distance are scaled by the player's chosen camera-angle preset.
+	var zoom := settings.cam_zoom_mult
+	var cam_h := _fs * settings.cam_height_mult * zoom
+	var cam_z := _fs * (4.0 / 3.0) * settings.cam_dist_mult * zoom
+	var follow_z := clampf(-sim.ball.y * _fs * 0.12, -_fs * (2.5 / 18.0), _fs * (2.5 / 18.0))
+	# Keep the camera behind the ball along +z so it never crosses to the far side of it.
+	# If it did, look_at would swing ~180 deg and mirror the on-screen directions (mouse
+	# aim + movement) -- exactly what the short-distance Top-down preset was hitting.
+	var ball_z := -sim.ball.y * _fs
+	var target_z := maxf(cam_z + follow_z, ball_z + _fs * 0.27)
+	var target_pos := Vector3(clampf(sim.ball.x * _fs * 0.25, -_fs * (5.0 / 18.0), _fs * (5.0 / 18.0)), cam_h, target_z)
 	camera_rig.position = camera_rig.position.lerp(target_pos, 1.0 - exp(-1.8 * delta))
 	camera_look = camera_look.lerp(GameConfig.to_3d(Vector2(sim.ball.x, sim.ball.y), 0.2), 1.0 - exp(-3.5 * delta))
 	camera_3d.look_at(camera_look, Vector3.UP)
 
-func _trigger_goal(_scorer: int) -> void:
+func trigger_goal(_scorer: int) -> void:
 	celebration_timer = 1.5
 	_spawn_confetti()
-	audio._play_whistle()
+	audio.play_whistle()
 
 func _spawn_confetti() -> void:
+	if confetti_mms.is_empty():
+		return
 	for i in 72:
-		var mat: Material = material_factory.materials.confetti_gold
-		if i % 3 == 0:
-			mat = material_factory.materials.confetti_red
-		elif i % 3 == 1:
-			mat = material_factory.materials.confetti_blue
-		var piece := material_factory._mesh("Confetti", BoxMesh.new(), mat, GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2)))
-		piece.mesh.size = Vector3(0.10, 0.035, 0.16)
-		vfx_root.add_child(piece)
-		var velocity := Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
-		confetti.append(VfxParticle.new(piece, velocity, randf_range(1.2, 2.3)))
+		var pool := i % confetti_mms.size()
+		var slot: int = confetti_cursor[pool]
+		confetti_cursor[pool] = (slot + 1) % CONFETTI_PER_COLOR
+		var origin := GameConfig.to_3d(Vector2(randf_range(-0.75, 0.75), randf_range(-0.55, 0.55)), randf_range(2.2, 4.2))
+		var basis := Basis.from_euler(Vector3(randf() * TAU, randf() * TAU, 0.0))
+		confetti_mms[pool].set_instance_transform(slot, Transform3D(basis, origin))
+		confetti_vel[pool][slot] = Vector3(randf_range(-2.0, 2.0), randf_range(2.0, 4.4), randf_range(-2.0, 2.0))
+		confetti_life[pool][slot] = randf_range(1.2, 2.3)
 
-func _update_confetti(delta: float) -> void:
-	for i in range(confetti.size() - 1, -1, -1):
-		var p := confetti[i]
-		p.life -= delta
-		p.velocity.y -= 4.8 * delta
-		p.node.position += p.velocity * delta
-		p.node.rotate_x(delta * 8.0)
-		p.node.rotate_y(delta * 10.0)
-		if p.life <= 0.0:
-			p.node.queue_free()
-			confetti.remove_at(i)
+func update_confetti(delta: float) -> void:
+	for pool in confetti_mms.size():
+		var mm: MultiMesh = confetti_mms[pool]
+		for slot in CONFETTI_PER_COLOR:
+			var life: float = confetti_life[pool][slot]
+			if life <= 0.0:
+				continue
+			life -= delta
+			confetti_life[pool][slot] = life
+			if life <= 0.0:
+				mm.set_instance_transform(slot, _hidden_xform())
+				continue
+			var vel: Vector3 = confetti_vel[pool][slot]
+			vel.y -= 4.8 * delta
+			confetti_vel[pool][slot] = vel
+			var xform := mm.get_instance_transform(slot)
+			xform.origin += vel * delta
+			xform.basis = xform.basis.rotated(Vector3.RIGHT, delta * 8.0).rotated(Vector3.UP, delta * 10.0)
+			mm.set_instance_transform(slot, xform)
 
-func _set_glb_animations_paused(paused: bool) -> void:
-	var speed := 0.0 if paused else 1.0
-	for p in sim.team_red:
-		if p.animation_player != null:
-			p.animation_player.speed_scale = speed
-	for p in sim.team_blue:
-		if p.animation_player != null:
-			p.animation_player.speed_scale = speed
+## Sets the playback speed of every GLB skeleton: 0 pauses them, a value
+## below 1 follows the match's slow motion. Cheap to call every frame.
+func set_glb_animation_speed(speed: float) -> void:
+	if is_equal_approx(speed, _anim_speed):
+		return
+	_anim_speed = speed
+	refresh_animation_speed()
+
+## Re-applies the current speed after players were rebuilt.
+func refresh_animation_speed() -> void:
+	var speed := _anim_speed
+	for ts in sim.teams:
+		for p in ts.players:
+			if p.animation_player != null:
+				p.animation_player.speed_scale = speed

@@ -1,0 +1,141 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #fff; font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; }
+  .fig { width: 1600px; height: 900px; position: relative; }
+  svg text { font-family: inherit; }
+</style></head>
+<body>
+<div class="fig" id="arch"></div>
+<div class="fig" id="comp"></div>
+<div class="fig" id="rec" style="height:520px"></div>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+function svg(id, w, h) {
+  const s = document.createElementNS(NS, "svg");
+  s.setAttribute("width", w); s.setAttribute("height", h); s.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  s.innerHTML = `<defs><marker id="ah-${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334"/></marker></defs>`;
+  document.getElementById(id).appendChild(s);
+  return s;
+}
+function el(s, tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  s.appendChild(e); return e;
+}
+const C = {
+  gw: ["#fff4e5", "#e08a00"], py: ["#e8f1ff", "#2f6fd6"], gd: ["#f1eaff", "#7b4fd0"],
+  db: ["#e9f8ee", "#2c9a55"], cl: ["#f2f2f2", "#666"], opt: ["#fdf0f6", "#c24785"],
+};
+function box(s, x, y, w, h, col, title, lines = [], dashed = false) {
+  el(s, "rect", { x, y, width: w, height: h, rx: 10, fill: col[0], stroke: col[1], "stroke-width": 2.5,
+                  "stroke-dasharray": dashed ? "8 6" : "" });
+  el(s, "text", { x: x + w / 2, y: y + 30, "text-anchor": "middle", "font-size": 21, "font-weight": "bold", fill: "#123" }, title);
+  lines.forEach((t, i) => el(s, "text", { x: x + w / 2, y: y + 56 + i * 22, "text-anchor": "middle", "font-size": 16, fill: "#345" }, t));
+}
+function zone(s, x, y, w, h, label) {
+  el(s, "rect", { x, y, width: w, height: h, rx: 16, fill: "none", stroke: "#99a", "stroke-width": 2, "stroke-dasharray": "10 8" });
+  el(s, "text", { x: x + 16, y: y + h - 14, "font-size": 16, fill: "#667", "font-style": "italic" }, label);
+}
+function arrow(s, id, pts, label, lx, ly, both = false, anchor = "middle") {
+  el(s, "polyline", { points: pts.map((p) => p.join(",")).join(" "), fill: "none", stroke: "#334", "stroke-width": 2.2,
+                      "marker-end": `url(#ah-${id})`, "marker-start": both ? `url(#ah-${id})` : "" });
+  if (label) {
+    const t = el(s, "text", { x: lx, y: ly, "text-anchor": anchor, "font-size": 15, fill: "#223" }, label);
+    const b = t.getBBox();
+    const r = document.createElementNS(NS, "rect");
+    for (const [k, v] of Object.entries({ x: b.x - 4, y: b.y - 2, width: b.width + 8, height: b.height + 4, fill: "#fff", rx: 4 })) r.setAttribute(k, v);
+    s.insertBefore(r, t);
+  }
+}
+
+// ---------- 1. Architecture ----------
+{
+  const s = svg("arch", 1600, 900), id = "arch";
+  el(s, "text", { x: 800, y: 34, "text-anchor": "middle", "font-size": 26, "font-weight": "bold", fill: "#123" },
+     "Arquitetura de microsserviços (docker-compose.yml)");
+  zone(s, 318, 60, 286, 800, "rede public");
+  zone(s, 628, 60, 952, 800, "rede internal (internal: true, sem rota para fora)");
+  box(s, 30, 360, 260, 170, C.cl, "Cliente (jogo)", ["Godot 4.7 Web (navegador)", "ou desktop", "HTTP(S) + WebSocket"]);
+  box(s, 340, 330, 240, 230, C.gw, "API Gateway", ["Caddy 2.10", "única porta publicada", ":8080 / :8443", "TLS, web build,", "/api/status/v1/*"]);
+  box(s, 690, 80, 320, 140, C.py, "Lobby", ["Python 3.12 · FastAPI", "salas, convidados, credenciais", "gateway: /api/lobby/v1/*"]);
+  box(s, 690, 255, 320, 150, C.gd, "Match Runtime", ["Godot headless (servidor)", ":8910 WebSocket · :8911 controle", "gateway: /ws/game/*"]);
+  box(s, 690, 450, 320, 140, C.py, "Results", ["Python 3.12 · FastAPI", "histórico e ranking", "gateway: /api/stats/v1/*"]);
+  box(s, 690, 660, 320, 165, C.opt, "Recommendation", ["Python 3.12 · FastAPI", "Elo, nível de IA, rivais (sem BD)", "gateway:", "/api/recommendations/v1/*"]);
+  box(s, 1200, 70, 340, 110, C.opt, "AI Bot", ["Godot headless · :8920", "adversário de IA online"]);
+  box(s, 1200, 400, 340, 190, C.db, "PostgreSQL 17", ["infraestrutura", "BD lobby  (papel lobby)", "BD results (papel results)", "um banco por serviço"]);
+  box(s, 1200, 690, 340, 110, C.cl, "Volume runtime-data", ["registro de partidas encerradas", "spool durável de resultados"], true);
+  arrow(s, id, [[290, 445], [338, 445]], "", 0, 0);
+  el(s, "text", { x: 160, y: 560, "text-anchor": "middle", "font-size": 15, fill: "#223" }, "HTTPS / WSS");
+  arrow(s, id, [[580, 370], [640, 370], [640, 150], [688, 150]], "", 0, 0);
+  arrow(s, id, [[580, 420], [660, 420], [660, 330], [688, 330]], "", 0, 0);
+  arrow(s, id, [[580, 470], [660, 470], [660, 520], [688, 520]], "", 0, 0);
+  arrow(s, id, [[580, 520], [640, 520], [640, 742], [688, 742]], "", 0, 0);
+  arrow(s, id, [[790, 220], [790, 253]], "API de controle (bearer)", 800, 243, false, "start");
+  arrow(s, id, [[1010, 120], [1198, 120]], "API de jobs (bearer)", 1105, 110);
+  arrow(s, id, [[1260, 180], [1260, 300], [1012, 300]], "WebSocket como jogador", 1030, 290, false, "start");
+  arrow(s, id, [[790, 405], [790, 448]], "POST resultado (bearer)", 800, 433, false, "start");
+  arrow(s, id, [[900, 658], [900, 592]], "GET /v1/matches/recent", 910, 630, false, "start");
+  arrow(s, id, [[1010, 200], [1150, 200], [1150, 440], [1198, 440]], "SQL", 1158, 400, false, "start");
+  arrow(s, id, [[1010, 530], [1198, 530]], "SQL", 1105, 520);
+  arrow(s, id, [[1010, 380], [1080, 380], [1080, 745], [1198, 745]], "arquivos", 1088, 650, false, "start");
+  // legend
+  const lg = [[C.gw, "gateway (infra)"], [C.py, "microsserviço Python"], [C.gd, "microsserviço Godot"], [C.opt, "microsserviço opcional"], [C.db, "banco de dados (infra)"]];
+  lg.forEach(([c, t], i) => {
+    el(s, "rect", { x: 30 + i * 300, y: 872, width: 22, height: 16, fill: c[0], stroke: c[1], "stroke-width": 2 });
+    el(s, "text", { x: 60 + i * 300, y: 886, "font-size": 15, fill: "#333" }, t);
+  });
+}
+
+// ---------- 2. Components ----------
+{
+  const s = svg("comp", 1600, 900), id = "comp";
+  el(s, "text", { x: 800, y: 34, "text-anchor": "middle", "font-size": 26, "font-weight": "bold", fill: "#123" },
+     "Componentes de software reutilizados (quem usa o quê)");
+  // components in the middle
+  box(s, 560, 80, 480, 130, C.gw, "MatchSession + MatchConfig", ["regras, relógio, eventos de uma partida", "scripts/match/"]);
+  box(s, 560, 250, 480, 110, C.gw, "NetProtocol v1", ["codec binário (HELLO, INPUT, SNAPSHOT...)", "scripts/net/protocol.gd"]);
+  box(s, 560, 400, 480, 110, C.gw, "MatchToken  =  credentials.py", ["mesma credencial HMAC em GDScript e Python", "vetores de teste compartilhados"]);
+  box(s, 560, 550, 480, 100, C.gw, "Tactics", ["consultas táticas puras", "scripts/ai/tactics.gd"]);
+  box(s, 560, 690, 480, 100, C.gw, "ControlServer", ["servidor HTTP/1.1 limitado e não bloqueante", "scripts/server/control_server.gd"]);
+  // adapters left
+  box(s, 40, 100, 380, 110, C.cl, "Jogo offline", ["MatchController3D (Play Now)"]);
+  box(s, 40, 260, 380, 110, C.cl, "Jogo online (cliente)", ["NetClient + SnapshotBuffer", "+ sessão espelho"]);
+  box(s, 40, 430, 380, 110, C.cl, "Lobby (Python)", ["assina credenciais"]);
+  box(s, 40, 580, 380, 110, C.cl, "AIController", ["IA interna da simulação"]);
+  // adapters right
+  box(s, 1180, 100, 380, 110, C.gd, "Match Runtime", ["MatchRoom: uma sessão por sala"]);
+  box(s, 1180, 280, 380, 110, C.opt, "AI Bot", ["BotSession (espelho) + BotBrain"]);
+  box(s, 1180, 460, 380, 110, C.gd, "RuntimeControlApi", ["API interna do runtime"]);
+  box(s, 1180, 640, 380, 110, C.opt, "BotJobApi", ["API interna do ai-bot"]);
+  const L = (y1, y2) => arrow(s, id, [[420, y1], [558, y2]], "", 0, 0);
+  const R = (y1, y2) => arrow(s, id, [[1180, y1], [1042, y2]], "", 0, 0);
+  L(155, 145); L(315, 160); L(315, 305); L(485, 455); L(635, 600);
+  R(155, 145); R(320, 170); R(155, 300); R(335, 300); R(170, 455); R(350, 600); R(515, 740); R(695, 740);
+  el(s, "text", { x: 800, y: 845, "text-anchor": "middle", "font-size": 17, fill: "#333" },
+     "Um componente = módulo com interface pequena e documentada, dono do próprio estado, usado por mais de um adaptador.");
+}
+
+// ---------- 3. Recommendation pipeline ----------
+{
+  const s = svg("rec", 1600, 520), id = "rec";
+  el(s, "text", { x: 800, y: 34, "text-anchor": "middle", "font-size": 26, "font-weight": "bold", fill: "#123" },
+     "Sistema de recomendação: do histórico de partidas ao painel do jogo");
+  box(s, 20, 90, 270, 170, C.py, "Results", ["GET /v1/matches/recent", "páginas, mais nova", "primeiro"]);
+  box(s, 340, 90, 280, 170, C.opt, "Modelo de leitura", ["só partidas contadas", "incremental a cada 10 s", "completo a cada 5 min", "(model.py)"]);
+  box(s, 670, 90, 280, 170, C.opt, "Motor Elo", ["rating por jogador e bot", "K 40 → 24, índice de", "saldo de gols", "(engine.py)"]);
+  box(s, 1000, 90, 260, 170, C.opt, "Recomendação", ["nível de IA: P ≈ 0,6", "3 rivais mais próximos", "(engine.py)"]);
+  box(s, 1310, 90, 270, 170, C.cl, "Jogo: painel", ["\"Recommended for you\"", "via gateway", "/api/recommendations/v1"]);
+  arrow(s, id, [[290, 175], [338, 175]], "", 0, 0);
+  arrow(s, id, [[620, 175], [668, 175]], "", 0, 0);
+  arrow(s, id, [[950, 175], [998, 175]], "", 0, 0);
+  arrow(s, id, [[1260, 175], [1308, 175]], "", 0, 0);
+  const f = ["Expectativa:  E = 1 / (1 + 10^((Rb − Ra) / 400))",
+             "Atualização:  R' = R + K · G · (S − E),  com S = 1 (vitória), 0,5 (empate), 0 (derrota)",
+             "Índice de saldo:  G = 1 (0–1 gol), 1,5 (2 gols), (11 + N) / 8 (N ≥ 3)",
+             "Nível recomendado: o bot (Easy 900 · Normal 1050 · Hard 1200 iniciais) com E mais próximo de 0,6"];
+  f.forEach((t, i) => el(s, "text", { "xml:space": "preserve", x: 800, y: 330 + i * 44, "text-anchor": "middle", "font-size": 22, fill: "#223" }, t));
+}
+</script>
+</body></html>

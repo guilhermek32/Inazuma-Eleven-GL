@@ -6,8 +6,71 @@ extends RefCounted
 ## hold a reference to it as `mf`.
 
 var materials := {}
+# Original grass values, stashed the first time set_pitch_wet() darkens them.
+var _dry_pitch := {}
 
-func _build_materials() -> void:
+# Goal-net ripple: vertices are displaced along their normal by a radial sine
+# wave centred on the (world-space) ball impact point, decaying in both distance
+# and time. ripple_strength 0 = completely still.
+const NET_SHADER_CODE := "
+shader_type spatial;
+render_mode cull_disabled;
+uniform sampler2D albedo_tex : source_color;
+uniform vec3 impact_world = vec3(0.0);
+uniform float ripple_time = 10.0;
+uniform float ripple_strength = 0.0;
+void vertex() {
+	vec3 wv = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	float d = distance(wv, impact_world);
+	float amp = ripple_strength * exp(-d * 1.6) * exp(-ripple_time * 2.6);
+	VERTEX += NORMAL * amp * sin(d * 9.0 - ripple_time * 22.0);
+}
+void fragment() {
+	vec4 c = texture(albedo_tex, UV);
+	ALBEDO = c.rgb;
+	ALPHA = c.a;
+	ROUGHNESS = 0.7;
+}
+"
+
+## Fresh net material instance (one per goal, so only the goal that concedes ripples).
+func make_net_material() -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = NET_SHADER_CODE
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("albedo_tex", _net_texture())
+	return mat
+
+## Soft dark radial-gradient material for the blob shadow quad under each player:
+## real shadows get lost at broadcast distance, the blob keeps players grounded.
+func make_blob_shadow_material(size := 64) -> StandardMaterial3D:
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var c := float(size - 1) * 0.5
+	for y in size:
+		for x in size:
+			var d := Vector2((float(x) - c) / c, (float(y) - c) / c).length()
+			var a := clampf(1.0 - d, 0.0, 1.0)
+			img.set_pixel(x, y, Color(0.0, 0.0, 0.0, a * a * 0.55))
+	img.generate_mipmaps()
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_texture = ImageTexture.create_from_image(img)
+	mat.no_depth_test = false
+	return mat
+
+## Rain visual: darkens and polishes the turf so the floodlights leave a wet sheen.
+func set_pitch_wet(wet: bool) -> void:
+	for key in ["grass", "grass_dark"]:
+		var m: StandardMaterial3D = materials[key]
+		if not _dry_pitch.has(key):
+			_dry_pitch[key] = {"rough": m.roughness, "col": m.albedo_color, "spec": m.metallic_specular}
+		m.roughness = 0.22 if wet else _dry_pitch[key].rough
+		m.metallic_specular = 0.75 if wet else _dry_pitch[key].spec
+		m.albedo_color = (_dry_pitch[key].col as Color) * Color(0.78, 0.78, 0.85) if wet else _dry_pitch[key].col
+
+func build_materials() -> void:
 	# Pre-bake procedural normal maps: tangent-space RGB from height-field gradients.
 	var grass_nrm := _normal_texture(2.5, 0x6752)
 	var concrete_nrm := _normal_texture(3.0, 0xC0FF)
@@ -15,11 +78,11 @@ func _build_materials() -> void:
 
 	# --- Pitch surfaces --- lower roughness so floodlights leave a turf sheen; the two
 	# tones are pushed apart so the alternating mow stripes read clearly on broadcast.
-	materials.grass = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.105, 0.40, 0.145)), grass_nrm)
+	materials.grass = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.115, 0.42, 0.115)), grass_nrm)
 	materials.grass.normal_scale = 0.6
 	materials.grass.anisotropy_enabled = true   # directional sheen along mow stripes
 	materials.grass.anisotropy = 0.7
-	materials.grass_dark = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.068, 0.27, 0.10)), grass_nrm)
+	materials.grass_dark = _material(Color.WHITE, 0.62, 0.0, _grass_texture(Color(0.072, 0.30, 0.075)), grass_nrm)
 	materials.grass_dark.normal_scale = 0.6
 	materials.grass_dark.anisotropy_enabled = true
 	materials.grass_dark.anisotropy = 0.7
@@ -106,7 +169,7 @@ func _build_materials() -> void:
 	materials.special_aura.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	materials.special_aura.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-func _mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+func make_mesh(node_name: String, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
 	var node := MeshInstance3D.new()
 	node.name = node_name
 	node.mesh = mesh
@@ -201,7 +264,7 @@ func _grass_texture(base: Color, size := 512) -> Texture2D:
 	var patch_field := PackedFloat32Array()
 	patch_field.resize((patch + 1) * (patch + 1))
 	for i in patch_field.size():
-		patch_field[i] = rng.randf_range(-0.10, 0.10)
+		patch_field[i] = rng.randf_range(-0.05, 0.05)
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	for y in size:
 		for x in size:
@@ -217,8 +280,9 @@ func _grass_texture(base: Color, size := 512) -> Texture2D:
 			var p01 := patch_field[(iy + 1) * (patch + 1) + ix]
 			var p11 := patch_field[(iy + 1) * (patch + 1) + ix + 1]
 			var patch_val := lerpf(lerpf(p00, p10, tx), lerpf(p01, p11, tx), ty)
-			# High-frequency per-blade speckle.
-			var blade := rng.randf_range(-0.07, 0.07)
+			# High-frequency per-blade speckle (kept subtle: strong speckle mips
+			# into blotchy mottling at broadcast distance).
+			var blade := rng.randf_range(-0.035, 0.035)
 			# Faint vertical mow banding (blades lie along the stripe direction).
 			var band := sin(float(x) / float(size) * TAU * 24.0) * 0.025
 			var f := 1.0 + patch_val + blade + band
@@ -242,14 +306,15 @@ func _net_texture(size := 64, step := 8) -> Texture2D:
 	img.fill(Color(1.0, 1.0, 1.0, 0.0))
 	for y in size:
 		for x in size:
-			if x % step == 0 or y % step == 0:
-				img.set_pixel(x, y, Color(0.92, 0.95, 1.0, 0.8))
+			# 2-px fully opaque grid lines so the nets stay readable at distance.
+			if x % step < 2 or y % step < 2:
+				img.set_pixel(x, y, Color(0.92, 0.95, 1.0, 1.0))
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
 
 # Soft radial scuff for the ball's grass trail: a dark pressed-turf disc that fades
 # to fully transparent at the rim, with a little noise so repeated marks vary.
-func _decal_albedo_texture(size := 64) -> Texture2D:
+func decal_albedo_texture(size := 64) -> Texture2D:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 0xDEC0
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
@@ -271,7 +336,7 @@ func _decal_albedo_texture(size := 64) -> Texture2D:
 # Radial dimple normal map for the trail decal: the turf is pressed down where the
 # ball rolled, so surface normals tilt inward — this is what perturbs ("interferes
 # with") the grass normals under the decal so the floodlights catch the dent.
-func _decal_normal_texture(size := 64, strength := 4.0) -> Texture2D:
+func decal_normal_texture(size := 64, strength := 4.0) -> Texture2D:
 	var c := float(size - 1) * 0.5
 	var h := PackedFloat32Array()
 	h.resize(size * size)

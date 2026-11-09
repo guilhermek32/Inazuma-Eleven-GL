@@ -3,3 +3,9 @@ RonaldinhoSoccer
 obj/
 .godot/
 .claude/
+
+# Godot export output
+build/
+
+# Local deployment secrets (see .env.example)
+.env

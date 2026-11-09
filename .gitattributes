@@ -1,0 +1,12 @@
+# Files consumed inside Linux containers or by POSIX tools must keep LF even on
+# Windows checkouts (a CRLF Dockerfile breaks its backslash line continuations).
+Dockerfile text eol=lf
+**/Dockerfile text eol=lf
+Caddyfile text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.mjs text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.sql text eol=lf
