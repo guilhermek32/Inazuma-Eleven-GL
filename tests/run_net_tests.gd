@@ -23,6 +23,7 @@ func _run() -> void:
 	_test_protocol_rejects_malformed()
 	_test_input_queue()
 	_test_snapshot_buffer()
+	_test_attach_dropped_mid_send()
 	runtime = MatchRuntime.new()
 	runtime.allow_dev_tokens = true
 	runtime.dev_config.half_length_s = 60.0
@@ -444,6 +445,32 @@ func _test_online_match() -> void:
 	c0c.close()
 	c1.close()
 	await _pump([c0c, c1], 10)
+
+## A reconnecting peer whose WELCOME can't be queued is dropped inside attach()
+## (send -> drop -> detach). The team must stay absent with a live deadline, so
+## the paused match still forfeits instead of waiting forever.
+func _test_attach_dropped_mid_send() -> void:
+	var ctx := {"room": null, "fail_peer": -1}
+	var send := func(peer: int, _bytes: PackedByteArray, _droppable: bool) -> void:
+		if peer == ctx.fail_peer:
+			ctx.fail_peer = -1
+			(ctx.room as MatchRoom).detach(peer)
+	var close := func(_peer: int, _code: int, _reason: String) -> void: pass
+	var room := MatchRoom.new("attach-drop", MatchConfig.new(), 1, send, close)
+	ctx.room = room
+	room.attach(0, 1)
+	room.attach(1, 2)
+	_check(room.state == MatchRoom.State.RUNNING, "attach-drop: both seats start the match")
+	room.detach(1)
+	ctx.fail_peer = 3
+	room.attach(0, 3)
+	_check(room.state == MatchRoom.State.PAUSED and not room.is_attached(0),
+			"a peer dropped while its WELCOME is sent leaves the match paused")
+	room.reconnect_grace_ms = 0
+	room.step(1.0 / 60.0)
+	_check(room.state == MatchRoom.State.FINISHED and room.result.get("reason") == "forfeit"
+			and room.result.get("winner") == 1, "the dropped team still forfeits at its deadline")
+	room.dispose()
 
 func _test_forfeit() -> void:
 	var a := _client("m2", "dev:0")

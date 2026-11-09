@@ -112,8 +112,17 @@ func attach(team: int, peer_id: int) -> int:
 	(slot.queue as RemoteInputQueue).reset(slot.epoch)
 	if previous >= 0 and previous != peer_id:
 		_close.call(previous, NetProtocol.CLOSE_REPLACED, "replaced by a newer connection")
+	# The absence ends before any send: a send that fails drops the peer, whose
+	# detach must then start a fresh absence with its own deadline.
+	if _absent_since_ms[team] > 0:
+		_paused_total_ms[team] += Time.get_ticks_msec() - _absent_since_ms[team]
+		_absent_since_ms[team] = 0
 	_send.call(peer_id, NetProtocol.encode_welcome(match_id, team, slot.epoch, TICK_RATE, SNAPSHOT_EVERY, 3, config), false)
+	if slot.peer != peer_id:
+		return slot.epoch   # dropped while sending WELCOME
 	_send.call(peer_id, _snapshot_for(team, NetProtocol.SNAP_DISCONTINUITY), false)
+	if slot.peer != peer_id:
+		return slot.epoch   # dropped while sending the baseline
 	if is_attached(0) and is_attached(1):
 		if state == State.WAITING:
 			state = State.RUNNING
@@ -122,9 +131,6 @@ func attach(team: int, peer_id: int) -> int:
 		elif state == State.PAUSED:
 			state = State.RUNNING
 			_broadcast_event({"type": "resumed"})
-	if _absent_since_ms[team] > 0:
-		_paused_total_ms[team] += Time.get_ticks_msec() - _absent_since_ms[team]
-		_absent_since_ms[team] = 0
 	return slot.epoch
 
 ## The peer's connection ended. A running match pauses for the reconnect grace.

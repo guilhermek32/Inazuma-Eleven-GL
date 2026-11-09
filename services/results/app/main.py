@@ -37,6 +37,17 @@ from .service import BadCursor, ResultsService
 MAX_BODY_BYTES = 65536
 
 
+def _has_nul(value) -> bool:
+    """Whether any string in a decoded JSON document (key or value) contains U+0000."""
+    if isinstance(value, str):
+        return "\x00" in value
+    if isinstance(value, dict):
+        return any(_has_nul(k) or _has_nul(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_has_nul(v) for v in value)
+    return False
+
+
 def create_app(database_url: str | None = None, ingest_token: str | None = None) -> FastAPI:
     logs.setup("results")
     database_url = database_url or os.environ.get("DATABASE_URL", "")
@@ -88,9 +99,11 @@ def create_app(database_url: str | None = None, ingest_token: str | None = None)
             return JSONResponse({"error": "too_large"}, status_code=413)
         try:
             # PostgreSQL jsonb cannot store U+0000: refuse it as invalid, not as a 500.
-            if b"\\u0000" in body:
-                raise ValueError("strings must not contain U+0000")
+            # Checked on the decoded strings: the raw bytes "\\u0000" can be an
+            # escaped backslash followed by the text u0000.
             document = json.loads(body)
+            if _has_nul(document):
+                raise ValueError("strings must not contain U+0000")
             result = MatchResult.model_validate(document)
         except ValueError as e:   # JSON errors and ValidationError alike
             detail = e.errors(include_url=False, include_context=False) if isinstance(e, ValidationError) else str(e)
